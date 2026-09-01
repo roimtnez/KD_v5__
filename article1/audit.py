@@ -16,7 +16,7 @@ from typing import Iterable
 import numpy as np
 
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
-from article1.distillation import METHODS, authority_from_holdout
+from article1.distillation import METHODS, authority_from_holdout, build_target
 
 
 def _sha256(path: Path) -> str:
@@ -35,6 +35,7 @@ def audit(
     results_path: Path, *, source_root: Path,
     datasets: Iterable[str] = DATASETS, seeds: Iterable[int] = SEEDS,
     regimes: Iterable[str] = REGIMES, methods: Iterable[str] = METHODS,
+    temperatures: Iterable[float] = (8.0,),
 ) -> dict:
     """Return a JSON-serializable audit. ``ok`` is false on any invariant error."""
     results_path, source_root = Path(results_path), Path(source_root)
@@ -78,8 +79,45 @@ def audit(
         _audit_source(condition, source_root, arm_rows, issues)
 
     expected_rows = len(conditions) * len(expected_methods)
+    sanity = _target_sanity(conditions, source_root, temperatures=tuple(temperatures), issues=issues)
     return {"ok": not issues, "rows": len(rows), "expected_rows": expected_rows,
+            "target_sanity": sanity,
             "conditions": len(conditions), "methods": len(expected_methods), "issues": issues}
+
+
+def _target_sanity(
+    conditions: list[tuple[str, int, str]], source_root: Path, *,
+    temperatures: tuple[float, ...], issues: list[dict],
+) -> dict:
+    """Rebuild targets from caches and enforce algebraic protocol invariants."""
+    checked = 0
+    for dataset, seed, regime in conditions:
+        cache_path = source_root / f"{dataset}-seed{seed}-{regime}" / "teacher_cache.npz"
+        if not cache_path.is_file():
+            continue
+        with np.load(cache_path, allow_pickle=False) as cache:
+            logits, labels, mask = cache["logits"], cache["labels"], cache["M"]
+        for temperature in temperatures:
+            targets = {method: build_target(logits, labels, mask, method=method, temperature=temperature) for method in METHODS}
+            checked += len(targets)
+            feddf = targets["feddf_logit"]
+            for method, target in targets.items():
+                if not np.isfinite(target.probabilities).all() or not np.allclose(target.probabilities.sum(axis=1), 1.0, atol=1e-6):
+                    _issue(issues, "invalid_target_distribution", condition=(dataset, seed, regime), method=method, temperature=temperature)
+                if not np.allclose(target.weights.sum(axis=1), 1.0, atol=1e-7) or (target.weights < 0).any():
+                    _issue(issues, "invalid_teacher_weights", condition=(dataset, seed, regime), method=method, temperature=temperature)
+                if target.fallback.any() and not np.array_equal(target.probabilities[target.fallback], feddf.probabilities[target.fallback]):
+                    _issue(issues, "fallback_differs_from_feddf", condition=(dataset, seed, regime), method=method, temperature=temperature)
+            expert = [targets[name].selected for name in ("expert_logit", "expert_prob", "expert_prob_sr")]
+            if not (np.array_equal(expert[0], expert[1]) and np.array_equal(expert[1], expert[2])):
+                _issue(issues, "expert_selection_differs", condition=(dataset, seed, regime), temperature=temperature)
+            if not np.array_equal(targets["oracle_logit"].selected, targets["oracle_prob"].selected):
+                _issue(issues, "oracle_selection_differs", condition=(dataset, seed, regime), temperature=temperature)
+            # Pure construction must be bitwise repeatable with immutable inputs.
+            repeated = build_target(logits, labels, mask, method="expert_prob_sr", temperature=temperature)
+            if not (np.array_equal(repeated.probabilities, targets["expert_prob_sr"].probabilities) and np.array_equal(repeated.weights, targets["expert_prob_sr"].weights)):
+                _issue(issues, "target_construction_not_exactly_reproducible", condition=(dataset, seed, regime), temperature=temperature)
+    return {"temperatures": list(temperatures), "targets_checked": checked}
 
 
 def _audit_source(condition: tuple[str, int, str], source_root: Path, arm_rows: list[dict], issues: list[dict]) -> None:
@@ -123,8 +161,10 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS))
     parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument("--temperatures", nargs="+", type=float, default=[8.0], help="target-sanity temperatures")
     args = parser.parse_args()
-    report = audit(args.results, source_root=args.source_root, datasets=args.datasets, seeds=args.seeds, regimes=args.regimes, methods=args.methods)
+    report = audit(args.results, source_root=args.source_root, datasets=args.datasets, seeds=args.seeds,
+                   regimes=args.regimes, methods=args.methods, temperatures=args.temperatures)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["ok"]: raise SystemExit(1)
 

@@ -48,6 +48,17 @@ def test_expert_variants_share_routing_and_sr_is_zero_outside_support():
     assert np.array_equal(targets[1].selected, targets[2].selected)
     # First sample selects teacher 0, which cannot emit class 2 under SR.
     assert targets[2].probabilities[0, 2] == 0
+    assert targets[1].metrics["pre_restriction_outside_support_mass"] is not None
+    assert targets[2].metrics["pre_restriction_outside_support_mass"] is not None
+    assert all(np.allclose(target.weights.sum(axis=1), 1.0) for target in targets)
+
+
+def test_effective_teachers_reports_uniform_and_concentrated_weighting():
+    z = np.array([[[8., 0.], [0., 0.]]]); y = np.array([0]); M = np.ones((2, 2), dtype=np.uint8)
+    uniform = build_target(z, y, M, method="feddf_logit")
+    confidence = build_target(z, y, M, method="confidence_logit")
+    assert uniform.metrics["effective_teachers"] == 2.0
+    assert confidence.metrics["effective_teachers"] < 2.0
 
 
 def test_oracle_and_consensus_have_the_shared_fallback():

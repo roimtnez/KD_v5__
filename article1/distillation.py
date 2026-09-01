@@ -21,6 +21,7 @@ EPS = 1e-12
 @dataclass(frozen=True)
 class Target:
     probabilities: np.ndarray
+    weights: np.ndarray
     selected: np.ndarray
     fallback: np.ndarray
     metrics: dict[str, float | int | str | None]
@@ -146,6 +147,10 @@ def build_target(
         q = (weights[..., None] * teacher_p).sum(axis=1)
         aggregation = "mean_probabilities" if method != "expert_prob_sr" else "mean_support_restricted_probabilities"
     q[fallback] = fallback_q[fallback]
+    # Report a normalized effective weight vector even on fallback rows.  The
+    # fallback itself remains an explicit logit-mean exception for probability
+    # arms, but its teacher weights are the FedDF-uniform weights.
+    weights[fallback] = 1.0 / z.shape[1]
     q /= q.sum(axis=1, keepdims=True)
     if not np.isfinite(q).all() or (q < 0).any():
         raise AssertionError("target is not a finite normalized distribution")
@@ -157,13 +162,19 @@ def build_target(
         "target_entropy": float(-(q * np.log(np.clip(q, EPS, 1.0))).sum(axis=1).mean()),
         "mean_selected_teachers": float(counts.mean()),
         "fallback_count": int(fallback.sum()), "fallback_rate": float(fallback.mean()),
-        "mean_outside_support_mass": None,
+        "pre_restriction_outside_support_mass": None,
+        "effective_teachers": float((1.0 / np.square(weights).sum(axis=1)).mean()),
     }
-    if method == "expert_prob_sr":
-        # This metric is defined only for covered samples and selected teachers.
+    if method in {"expert_prob", "expert_prob_sr"}:
+        assert m is not None
+        # This is computed from each selected teacher's full distribution before
+        # restriction, excluding fallback. It is a property of the condition,
+        # not an effect created by the SR output.
+        full = softmax(z, temperature)
+        outside_mass = 1.0 - (full * m[None, :, :]).sum(axis=2)
         event = selected & ~fallback[:, None]
-        metrics["mean_outside_support_mass"] = float(outside_mass[event].mean()) if event.any() else None
-    return Target(q.astype(np.float32), selected, fallback, metrics)
+        metrics["pre_restriction_outside_support_mass"] = float(outside_mass[event].mean()) if event.any() else None
+    return Target(q.astype(np.float32), weights.astype(np.float32), selected, fallback, metrics)
 
 
 def metadata_identity(*, method: str, temperature: float, config: dict, source_hash: str, proxy_hash: str, mask_hash: str) -> str:

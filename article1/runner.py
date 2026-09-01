@@ -99,7 +99,7 @@ def distill(*, cache: Path, data_dir: Path, results: Path, method: str, dataset:
     accuracy, nll = _evaluate(model, test_loader(test_ds), dev)
     row = {"run_id": run_id, "dataset": dataset, "regime": source_metadata["regime"], "seed": seed, "method": method, "temperature": temperature, "cache_sha256": cache_hash,
            "M_sha256": mask_hash, "proxy_sha256": proxy_hash, "student_init_sha256": initial_hash, "batch_order_sha256": order.digest.hexdigest(),
-           "updates": epochs * len(loader), "student_test_accuracy": accuracy, "student_test_nll": nll, **target.metrics}
+           "student_final_sha256": _hash_state(model.state_dict()), "updates": epochs * len(loader), "student_test_accuracy": accuracy, "student_test_nll": nll, **target.metrics}
     _update_table(Path(results), row)
     return row
 
@@ -108,13 +108,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__); subs = parser.add_subparsers(dest="stage", required=True)
     p = subs.add_parser("partition"); p.add_argument("--dataset", choices=DATASETS, required=True); p.add_argument("--regime", choices=REGIMES, required=True); p.add_argument("--seed", choices=SEEDS, type=int, required=True); p.add_argument("--data-dir", type=Path, default=Path("data")); p.add_argument("--output", type=Path, required=True); p.add_argument("--proxy-size", type=int, default=10_000)
     t = subs.add_parser("teachers"); t.add_argument("--dataset", choices=DATASETS, required=True); t.add_argument("--regime", choices=REGIMES, required=True); t.add_argument("--seed", choices=SEEDS, type=int, required=True); t.add_argument("--data-dir", type=Path, default=Path("data")); t.add_argument("--partitions", type=Path, required=True); t.add_argument("--output", type=Path, required=True); t.add_argument("--epochs", type=int, default=50); t.add_argument("--device", default="cpu")
-    d = subs.add_parser("distill"); d.add_argument("--dataset", choices=DATASETS, required=True); d.add_argument("--seed", choices=SEEDS, type=int, required=True); d.add_argument("--cache", type=Path, required=True); d.add_argument("--data-dir", type=Path, default=Path("data")); d.add_argument("--results", type=Path, required=True); d.add_argument("--method", choices=METHODS, required=True); d.add_argument("--epochs", type=int, default=30); d.add_argument("--device", default="cpu")
+    d = subs.add_parser("distill"); d.add_argument("--dataset", choices=DATASETS, required=True); d.add_argument("--seed", choices=SEEDS, type=int, required=True); d.add_argument("--cache", type=Path, required=True); d.add_argument("--data-dir", type=Path, default=Path("data")); d.add_argument("--results", type=Path, required=True); d.add_argument("--method", choices=METHODS, required=True); d.add_argument("--temperature", type=float, default=8.0); d.add_argument("--epochs", type=int, default=30); d.add_argument("--device", default="cpu")
     args = parser.parse_args()
     if args.stage == "partition":
         _, eval_ds, _ = datasets_for(args.dataset, args.data_dir); proxy, clients = make_partitions(np.asarray(labels_of(eval_ds)), regime=args.regime, seed=args.seed, proxy_size=args.proxy_size)
         save_partitions(args.output, proxy_idx=proxy, clients=clients, metadata={"dataset": args.dataset, "regime": args.regime, "seed": args.seed, "K": 10, "proxy_size": len(proxy)})
     elif args.stage == "teachers": train_and_cache(dataset=args.dataset, data_dir=args.data_dir, partition_dir=args.partitions, output_dir=args.output, seed=args.seed, regime=args.regime, epochs=args.epochs, device=args.device)
-    else: print(json.dumps(distill(cache=args.cache, data_dir=args.data_dir, results=args.results, method=args.method, dataset=args.dataset, seed=args.seed, epochs=args.epochs, device=args.device), indent=2))
+    else: print(json.dumps(distill(cache=args.cache, data_dir=args.data_dir, results=args.results, method=args.method, dataset=args.dataset, seed=args.seed, temperature=args.temperature, epochs=args.epochs, device=args.device), indent=2))
 
 
 if __name__ == "__main__": main()

@@ -44,6 +44,8 @@ All methods in a condition share proxy/index files, cached teachers, full studen
 
 The retained artifacts are partitions, one selected checkpoint per teacher, one `teacher_cache.npz`, `metadata.json`, and one safely-upserted canonical `results.csv`. Metrics per run are student test accuracy/NLL, target argmax accuracy/NLL/entropy at the actual temperature, selected-teacher count, fallback count/rate, and the stated EXPERT-SR support-mass diagnostic. `article1.analysis.paired_effects` summarizes deltas paired within dataset/regime/seed and reports mean/SD across seeds; clients and regimes are not treated as independent replicates.
 
+The paper-oriented, end-to-end analysis is in `notebooks/article1_definitive_analysis.ipynb`. It reads only the canonical result and condition tables and writes derived figures and tables to `OUTPUTS/article1/figures/` and `OUTPUTS/article1/tables/`.
+
 ## Commands
 
 ```bash
@@ -52,6 +54,8 @@ python -m article1.runner teachers --dataset mnist --regime alpha0p5 --seed 42 -
 python -m article1.runner distill --dataset mnist --seed 42 --method expert_prob_sr --cache OUTPUTS/article1/sources/mnist-42-alpha0p5/teacher_cache.npz --results OUTPUTS/article1/results.csv
 python -m article1.analysis OUTPUTS/article1/results.csv
 python -m article1.audit OUTPUTS/article1/results.csv
+python -m article1.conditions
+python -m article1.reproduce --dataset cifar --seed 42 --method expert_prob --cache OUTPUTS/article1/sources/cifar-seed42-alpha0p1/teacher_cache.npz
 pytest -q tests/test_article1_v2.py
 ```
 
@@ -65,10 +69,12 @@ python run_article1_grid.py --dry-run
 
 For a smoke run, use a small proxy in `partition` and `--epochs 1` in `teachers` and `distill`; it is an execution check, not a scientific result.
 
-## Literature boundary
+## Literature checkpoint 2: frozen shortlist
 
-`feddf_logit` is a one-shot adaptation of the logit-ensemble step in Lin et al., *Ensemble Distillation for Robust Model Fusion in Federated Learning* (NeurIPS 2020). The source method is an iterative federated model-fusion protocol and its official code uses server distillation data; this repository does **not** claim a full FedDF reproduction. See the [paper](https://arxiv.org/abs/2006.07242) and [official code](https://github.com/epfml/federated-learning-public-code/tree/master/codes/FedDF-code).
+The frozen main comparison is `feddf_logit`, `expert_logit`, and `oracle_logit`. `expert_logit` is the canonical EXPERT definition; the focused ablation is `expert_logit`, `expert_prob`, and `expert_prob_sr`. `oracle_prob` remains only an aggregation-space control. Class-supported and ORACLE+support hybrids are not in scope.
 
-Selective-FD was checked but is excluded: its client-side selector uses density-ratio/OOD estimation and its server selector filters ensemble outputs during an iterative client/server protocol, so it is not a compatible output-only, one-shot comparator without a protocol change. See the [Selective-FD paper](https://www.nature.com/articles/s41467-023-44383-9). No further SOTA comparator is currently implemented; the benchmark is therefore not scientifically closed as a SOTA survey.
+`feddf_logit` is a one-shot adaptation of the logit-ensemble step in Lin et al., *Ensemble Distillation for Robust Model Fusion in Federated Learning* (NeurIPS 2020). The source method is an iterative federated model-fusion protocol and its official code uses server distillation data; this repository does **not** claim a full FedDF reproduction. See the [paper](https://proceedings.neurips.cc/paper/2020/hash/18df51b97ccd68128e994804f3eccc87-Abstract.html) and [official code](https://github.com/epfml/federated-learning-public-code/tree/master/codes/FedDF-code).
 
-Interpret cautiously: EXPERT-SR's renormalization guarantees an increase in `q_y` and reduction in NLL whenever selected teachers have `M[k,y]=1`; it does not itself demonstrate removal of harmful knowledge. Probability aggregation remains sensitive to logit scale. Historical outputs using earlier definitions do not validate these methods automatically.
+Confidence, Consensus and Energy are frozen as secondary, explicitly in-house controls: this code does not represent them as faithful reproductions of published federated methods. Selective-FD was checked and excluded because it couples a client-side density-ratio/OOD selector with server-side filtering in an iterative client/server protocol; it is not a compatible output-only, one-shot comparator without changing the protocol. See the [Selective-FD paper](https://www.nature.com/articles/s41467-023-44383-9). No further external comparator is included in this benchmark.
+
+Interpret cautiously: EXPERT-SR's renormalization guarantees an increase in `q_y` and reduction in NLL whenever selected teachers have `M[k,y]=1`; it does not itself demonstrate removal of harmful knowledge. Probability aggregation remains sensitive to logit scale. Report mean ± SD and paired seed points, not significance tests with three seeds. Historical outputs using earlier definitions do not validate these methods automatically.
