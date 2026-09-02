@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from article1.distillation import METHODS, authority_from_holdout, build_target, metadata_identity
-from article1.partitioning import make_partitions, validate_splits
+from article1.partitioning import make_partitions, save_partitions, validate_splits
 from article1.audit import audit
 from article1.analysis import paired_effects
 from article1.backfill import backfill
@@ -18,6 +18,21 @@ from article1.hashes import array_sha256
 def test_holdout_authority_requires_observations():
     M = authority_from_holdout(np.array([[.99, .99]]), np.array([[2, 0]]), .9)
     assert M.tolist() == [[1, 0]]
+
+
+def test_M_is_reconstructible_from_holdout_only():
+    accuracy = np.array([[.9, .1], [.2, .95]])
+    counts = np.array([[4, 4], [4, 4]])
+    cached = authority_from_holdout(accuracy, counts, .8)
+    np.testing.assert_array_equal(cached, authority_from_holdout(accuracy.copy(), counts.copy(), .8))
+
+
+def test_new_partitions_record_protocol_and_creation_commit(tmp_path):
+    proxy = np.array([0, 1]); clients = [{"train_idx": np.array([2]), "holdout_idx": np.array([3]), "test_idx": np.array([4])}]
+    save_partitions(tmp_path / "partition", proxy_idx=proxy, clients=clients, metadata={"dataset": "mnist"})
+    metadata = json.loads((tmp_path / "partition" / "metadata.json").read_text())
+    assert metadata["protocol_version"] == "article1-v2"
+    assert metadata["creation_commit"] != "unknown"
 
 
 def test_splits_reserve_proxy_and_are_disjoint():

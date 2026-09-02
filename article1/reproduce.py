@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from article1 import DATASETS, SEEDS
@@ -14,11 +15,13 @@ def reproduce(**kwargs) -> dict:
     first = distill(**kwargs)
     second = distill(**kwargs)
     fields = ("run_id", "student_final_sha256", "student_init_sha256", "batch_order_sha256",
-              "student_test_accuracy", "student_test_nll", "target_accuracy", "target_nll", "target_entropy")
+              "student_test_accuracy", "student_test_nll", "target_accuracy", "target_nll", "target_entropy",
+              "mean_selected_teachers", "fallback_count", "fallback_rate",
+              "pre_restriction_outside_support_mass", "effective_teachers")
     differences = {field: (first[field], second[field]) for field in fields if first[field] != second[field]}
     if differences:
         raise RuntimeError(f"KD cell is not exactly reproducible: {differences}")
-    return {field: first[field] for field in fields}
+    return {"reproducible": True, "checked_fields": list(fields), "result": {field: first[field] for field in fields}}
 
 
 def main() -> None:
@@ -32,11 +35,15 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=8.0)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--report", type=Path, help="JSON report (default: next to the non-canonical results CSV)")
     args = parser.parse_args()
     result = reproduce(cache=args.cache, data_dir=args.data_dir, results=args.results, method=args.method,
                        dataset=args.dataset, seed=args.seed, temperature=args.temperature, epochs=args.epochs,
                        device=args.device)
-    print(result)
+    report = args.report or args.results.with_suffix(".report.json")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__": main()
