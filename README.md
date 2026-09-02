@@ -1,80 +1,37 @@
-# Article 1: selection and content in ensemble distillation
+# Artículo 1: selección y contenido en destilación de ensembles
 
-This repository is a deliberately small experimental pipeline, not a federated-learning framework. It asks two paired questions under class specialization: (1) which teachers should contribute to a public-proxy ensemble, and (2) once they contribute, whether the complete distribution or only their evidenced class support should be distilled.
+Este repositorio mantiene la base experimental del Artículo 1: bajo especialización por clase, compara quién contribuye a un ensemble de teachers y qué distribución se destila. El protocolo activo es `article1-v2`.
 
-The active scope is MNIST, Fashion-MNIST and CIFAR-10; `K=10`; IID, `alpha1p0`, `alpha0p5`, `alpha0p1`, `multi` and `single`; and seeds 42, 43 and 44. CIFAR-100, personalization and the other articles are outside the active pipeline.
+## Contrato validado
 
-## Data roles and stages
+El flujo es estrictamente: **partición → teachers → targets/KD → análisis**. La partición reserva primero el proxy público y separa, para cada cliente, `train_idx`, `holdout_idx` y `test_idx`. Solo `train` actualiza el teacher; `holdout` escoge el checkpoint y construye `M`; el test local y el test oficial son solo evaluación. Por tanto no hay test leakage hacia `M`, la selección de checkpoints ni los targets.
 
-`article1.partitioning` reserves the 10,000-example proxy from the *training* set before assigning any private examples. Every client then owns disjoint `train_idx`, `holdout_idx`, and `test_idx`: train updates parameters only; holdout selects the sole saved checkpoint and estimates competence; local test is post-hoc evaluation only. The official test set is only student evaluation. Holdout, local test, and proxy use deterministic evaluation transforms. Reusing the holdout for checkpoint selection and competence estimation can be optimistic due to selection; it is not an independent calibration set.
+Los nueve métodos son `feddf_logit`, `confidence_logit`, `consensus_logit`, `energy_logit`, `expert_logit`, `oracle_logit`, `expert_prob`, `expert_prob_sr` y `oracle_prob`. Los métodos `*_logit` aplican `softmax(sum_k w_k z_k / T)`; los métodos `*_prob` promedian `softmax(z_k / T)` con el mismo routing. EXPERT usa `M[k,y]`; ORACLE selecciona teachers que predicen `y`; `expert_prob_sr` restringe la distribución de cada teacher seleccionado a su soporte `M[k,:]` antes de normalizar.
 
-`article1.local_training` trains each teacher once for a dataset/seed/regime, selects one holdout checkpoint, and writes one float32 proxy-logit cache with indices, proxy labels, `M`, holdout counts/accuracy, and compact provenance. No proxy or test labels can affect `M`:
+El grid principal es únicamente **T=8** y vive en `OUTPUTS/article1/results.csv`. Las sensibilidades de temperatura deben usar un CSV distinto, por ejemplo `OUTPUTS/article1/results_temperature.csv`; nunca se mezclan con el grid principal. La identidad de una ejecución incluye dataset, régimen, semilla, método y temperatura.
 
-`M[k,c] = 1{n_holdout[k,c] > 0 and acc_holdout[k,c] >= threshold_dataset}`.
+Una selección vacía (EXPERT, ORACLE o Consensus) usa exactamente el fallback FedDF: `softmax(mean_k z_k / T)`. La fila conserva el fallback explícito y sus métricas; no es una observación eliminada ni un cambio de método.
 
-Initial thresholds are MNIST 0.90, Fashion-MNIST 0.80, and CIFAR-10 0.70. A teacher with an all-zero row is valid and is never selected by EXPERT.
+Los artefactos actuales `article1-v2` son particiones, checkpoints de teachers, un cache inmutable de logits y CSV canónicos. No se usan resultados ni notebooks históricos de `protocol_v1` como evidencia o validación de este contrato.
 
-`article1.distillation` is the only target implementation. It rebuilds targets from the shared cache and the one KD loop consumes probabilities directly:
+## Validación y reproducción
 
-`L = T² KL(q || softmax(student_logits/T))`.
-
-## Methods
-
-For all logit methods, `q(x) = softmax(sum_k w_k(x) z_k(x) / T)`. Weights are non-negative, sum to one per sample, and are scalar per teacher (never per class). No teacher logit calibration or normalization is implicit.
-
-| Identifier | Teacher selection / weights | Operator |
-|---|---|---|
-| `feddf_logit` | all, uniform | mean logits |
-| `confidence_logit` | all, `softmax_teachers(MSP)` | weighted logits |
-| `consensus_logit` | hard prediction equals `argmax mean_k softmax(z_k)` | mean selected logits |
-| `energy_logit` | all, `softmax_teachers(logsumexp(z_k))` | weighted logits |
-| `expert_logit` | `M[k,y]=1` | mean selected logits |
-| `oracle_logit` | `argmax(z_k)=y` | mean selected logits |
-| `expert_prob` | same EXPERT selection | mean `softmax(z_k/T)` |
-| `expert_prob_sr` | same EXPERT selection | restrict each `softmax(z_k/T)` to `M[k,:]`, renormalize, mean |
-| `oracle_prob` | same ORACLE selection | mean `softmax(z_k/T)` |
-
-Confidence fixes `T_weight=tau=1`, so it is softmax across teacher MSP values, **not** MSP divided by their sum. Energy fixes both parameters to one and is sensitive to offsets between teachers. Consensus is soft-vote routing, not a mode of hard labels. EXPERT and ORACLE use the proxy label; EXPERT is not label-free, and ORACLE is not a mathematical upper bound on the student.
-
-The main ablation is `expert_logit` vs `expert_prob` vs `expert_prob_sr`: first changes HOW outputs aggregate, then changes WHAT class mass remains. SR does no logit masking. For empty EXPERT, ORACLE, or Consensus selection, every arm (including probability arms) uses the same explicit fallback: `softmax(mean_k z_k/T)`. We report the fallback rate separately. For EXPERT-SR we additionally report selected-teacher mass outside support before restriction, excluding fallback rows.
-
-## Recipe, artifacts, and analysis
-
-All methods in a condition share proxy/index files, cached teachers, full student initialization, batch order, updates and recipe: `T=8`, AdamW, `lr=1e-3`, `weight_decay=1e-4`, batch 256, 30 epochs. The result identity hashes the method, temperature, recipe, cache, proxy, and `M`; incompatible artifacts are not reused. Student checkpoints and per-method targets are not stored by default.
-
-The retained artifacts are partitions, one selected checkpoint per teacher, one `teacher_cache.npz`, `metadata.json`, and one safely-upserted canonical `results.csv`. Metrics per run are student test accuracy/NLL, target argmax accuracy/NLL/entropy at the actual temperature, selected-teacher count, fallback count/rate, and the stated EXPERT-SR support-mass diagnostic. `article1.analysis.paired_effects` summarizes deltas paired within dataset/regime/seed and reports mean/SD across seeds; clients and regimes are not treated as independent replicates.
-
-The paper-oriented, end-to-end analysis is in `notebooks/article1_definitive_analysis.ipynb`. It reads only the canonical result and condition tables and writes derived figures and tables to `OUTPUTS/article1/figures/` and `OUTPUTS/article1/tables/`.
-
-## Commands
+Audita el grid principal y sus caches así:
 
 ```bash
-python -m article1.runner partition --dataset mnist --regime alpha0p5 --seed 42 --output OUTPUTS/article1/partitions/mnist-42-alpha0p5
-python -m article1.runner teachers --dataset mnist --regime alpha0p5 --seed 42 --partitions OUTPUTS/article1/partitions/mnist-42-alpha0p5 --output OUTPUTS/article1/sources/mnist-42-alpha0p5
-python -m article1.runner distill --dataset mnist --seed 42 --method expert_prob_sr --cache OUTPUTS/article1/sources/mnist-42-alpha0p5/teacher_cache.npz --results OUTPUTS/article1/results.csv
-python -m article1.analysis OUTPUTS/article1/results.csv
-python -m article1.audit OUTPUTS/article1/results.csv
-python -m article1.conditions
-python -m article1.reproduce --dataset cifar --seed 42 --method expert_prob --cache OUTPUTS/article1/sources/cifar-seed42-alpha0p1/teacher_cache.npz
-pytest -q tests/test_article1_v2.py
+python -m article1.audit OUTPUTS/article1/results.csv \
+  --source-root OUTPUTS/article1/sources \
+  > OUTPUTS/article1/audit_report.json
 ```
 
-The full grid is available as a Python launcher:
+Repite una sola celda KD, siempre fuera del CSV principal:
 
 ```bash
-python run_article1_grid.py --device cuda
-python run_article1_grid.py --stage distill --methods expert_logit expert_prob expert_prob_sr
-python run_article1_grid.py --dry-run
+python -m article1.reproduce \
+  --dataset cifar --seed 42 --method expert_logit \
+  --cache OUTPUTS/article1/sources/cifar-seed42-alpha0p1/teacher_cache.npz \
+  --results OUTPUTS/article1/reproducibility_check.csv \
+  --device cuda
 ```
 
-For a smoke run, use a small proxy in `partition` and `--epochs 1` in `teachers` and `distill`; it is an execution check, not a scientific result.
-
-## Literature checkpoint 2: frozen shortlist
-
-The frozen main comparison is `feddf_logit`, `expert_logit`, and `oracle_logit`. `expert_logit` is the canonical EXPERT definition; the focused ablation is `expert_logit`, `expert_prob`, and `expert_prob_sr`. `oracle_prob` remains only an aggregation-space control. Class-supported and ORACLE+support hybrids are not in scope.
-
-`feddf_logit` is a one-shot adaptation of the logit-ensemble step in Lin et al., *Ensemble Distillation for Robust Model Fusion in Federated Learning* (NeurIPS 2020). The source method is an iterative federated model-fusion protocol and its official code uses server distillation data; this repository does **not** claim a full FedDF reproduction. See the [paper](https://proceedings.neurips.cc/paper/2020/hash/18df51b97ccd68128e994804f3eccc87-Abstract.html) and [official code](https://github.com/epfml/federated-learning-public-code/tree/master/codes/FedDF-code).
-
-Confidence, Consensus and Energy are frozen as secondary, explicitly in-house controls: this code does not represent them as faithful reproductions of published federated methods. Selective-FD was checked and excluded because it couples a client-side density-ratio/OOD selector with server-side filtering in an iterative client/server protocol; it is not a compatible output-only, one-shot comparator without changing the protocol. See the [Selective-FD paper](https://www.nature.com/articles/s41467-023-44383-9). No further external comparator is included in this benchmark.
-
-Interpret cautiously: EXPERT-SR's renormalization guarantees an increase in `q_y` and reduction in NLL whenever selected teachers have `M[k,y]=1`; it does not itself demonstrate removal of harmful knowledge. Probability aggregation remains sensitive to logit scale. Report mean ± SD and paired seed points, not significance tests with three seeds. Historical outputs using earlier definitions do not validate these methods automatically.
+El único notebook definitivo activo es [`notebooks/article1_definitive_analysis.ipynb`](notebooks/article1_definitive_analysis.ipynb). Lee exclusivamente los CSV canónicos, valida el esquema y analiza de forma explícita T=8; no recalcula ni modifica resultados.
