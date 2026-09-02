@@ -8,7 +8,8 @@ import tempfile
 
 import numpy as np
 
-from article1 import REGIMES
+from article1 import PROTOCOL_VERSION, REGIMES
+from article1.hashes import git_commit
 
 
 def balanced_order(labels: np.ndarray, seed: int) -> np.ndarray:
@@ -123,4 +124,7 @@ def save_partitions(path: Path, *, proxy_idx: np.ndarray, clients: list[dict[str
     np.savez_compressed(path / "proxy.npz", proxy_idx=np.asarray(proxy_idx, dtype=np.int64))
     for cid, split in enumerate(clients):
         np.savez_compressed(path / f"client_{cid:03d}.npz", **split)
-    (path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    provenance = dict(metadata)
+    provenance.setdefault("protocol_version", PROTOCOL_VERSION)
+    provenance.setdefault("creation_commit", git_commit())
+    (path / "metadata.json").write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")

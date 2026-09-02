@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -17,14 +16,7 @@ import numpy as np
 
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
 from article1.distillation import METHODS, authority_from_holdout, build_target
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+from article1.hashes import array_sha256, artifact_commit, file_sha256
 
 
 def _issue(issues: list[dict], kind: str, **details) -> None:
@@ -145,12 +137,20 @@ def _audit_source(condition: tuple[str, int, str], source_root: Path, arm_rows: 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     if (metadata.get("dataset"), metadata.get("seed"), metadata.get("regime")) != condition:
         _issue(issues, "source_identity_mismatch", condition=condition)
-    digest = _sha256(cache_path)
+    digest = file_sha256(cache_path)
     if metadata.get("cache_sha256") != digest:
         _issue(issues, "cache_metadata_hash_mismatch", condition=condition)
+    declared_protocol = metadata.get("protocol_version", metadata.get("protocol"))
+    if declared_protocol not in {None, "article1-v2"}:
+        _issue(issues, "unsupported_source_protocol", condition=condition, protocol=declared_protocol)
+    creation_commit = artifact_commit(metadata)
     for row in arm_rows:
         if row["cache_sha256"] != digest:
             _issue(issues, "result_cache_hash_mismatch", condition=condition, method=row["method"])
+        if row.get("protocol_version") and row["protocol_version"] != "article1-v2":
+            _issue(issues, "result_protocol_mismatch", condition=condition, method=row["method"])
+        if row.get("cache_creation_commit") and row["cache_creation_commit"] != creation_commit:
+            _issue(issues, "result_cache_provenance_mismatch", condition=condition, method=row["method"])
     with np.load(cache_path, allow_pickle=False) as cache:
         needed = {"proxy_idx", "labels", "logits", "M", "holdout_accuracy", "holdout_counts"}
         absent = needed - set(cache.files)
@@ -162,8 +162,8 @@ def _audit_source(condition: tuple[str, int, str], source_root: Path, arm_rows: 
         expected_mask = authority_from_holdout(cache["holdout_accuracy"], cache["holdout_counts"], THRESHOLDS[dataset])
         if not np.array_equal(mask, expected_mask):
             _issue(issues, "M_not_reproducible_from_holdout", condition=condition)
-        m_hash = hashlib.sha256(mask.tobytes()).hexdigest()
-        p_hash = hashlib.sha256(cache["proxy_idx"].tobytes()).hexdigest()
+        m_hash = array_sha256(mask)
+        p_hash = array_sha256(cache["proxy_idx"])
         for row in arm_rows:
             if row["M_sha256"] != m_hash: _issue(issues, "result_M_hash_mismatch", condition=condition, method=row["method"])
             if row["proxy_sha256"] != p_hash: _issue(issues, "result_proxy_hash_mismatch", condition=condition, method=row["method"])

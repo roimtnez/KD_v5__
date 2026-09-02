@@ -11,11 +11,12 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
-from article1 import THRESHOLDS
+from article1 import PROTOCOL_VERSION, THRESHOLDS
 from article1.datasets import datasets_for, labels_of
 from article1.distillation import authority_from_holdout
 from article1.models import build_model
 from article1.partitioning import validate_splits
+from article1.hashes import file_sha256, git_commit
 
 
 def _seed(seed: int) -> None:
@@ -107,8 +108,9 @@ def train_and_cache(
     cache = output_dir / "teacher_cache.npz"
     np.savez_compressed(cache, proxy_idx=proxy_idx, labels=proxy_labels, logits=np.stack(all_logits, axis=1).astype(np.float32), M=mask,
                         holdout_accuracy=np.asarray(hold_acc), holdout_counts=np.asarray(hold_counts), test_accuracy=np.asarray(test_acc), test_counts=np.asarray(test_counts))
-    source_hash = hashlib.sha256(cache.read_bytes()).hexdigest()
-    (output_dir / "metadata.json").write_text(json.dumps({"protocol": "article1-v2", "dataset": dataset, "seed": seed, "regime": regime, "K": 10,
+    source_hash = file_sha256(cache)
+    (output_dir / "metadata.json").write_text(json.dumps({"protocol": PROTOCOL_VERSION, "protocol_version": PROTOCOL_VERSION, "dataset": dataset, "seed": seed, "regime": regime, "K": 10,
         "threshold": THRESHOLDS[dataset], "M_source": "holdout_accuracy_and_counts_only", "proxy_source": str(proxy_file), "cache_sha256": source_hash,
+        "cache_creation_commit": git_commit(),
         "teacher_state_sha256": hashes, "teacher_fingerprint": hashlib.sha256("".join(hashes).encode()).hexdigest()}, indent=2, sort_keys=True) + "\n")
     return cache

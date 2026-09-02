@@ -15,12 +15,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Sampler
 
-from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
+from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS, THRESHOLDS
 from article1.datasets import datasets_for, labels_of, test_loader
 from article1.distillation import METHODS, build_target, kd_loss, metadata_identity
 from article1.local_training import _hash_state, _seed, train_and_cache
 from article1.models import build_model
 from article1.partitioning import make_partitions, save_partitions
+from article1.hashes import array_sha256, artifact_commit, file_sha256, git_commit
 
 
 class _Proxy(Dataset):
@@ -79,10 +80,10 @@ def distill(*, cache: Path, data_dir: Path, results: Path, method: str, dataset:
     with np.load(cache, allow_pickle=False) as data:
         logits, labels, indices, mask = data["logits"], data["labels"], data["proxy_idx"], data["M"]
     config = {"epochs": epochs, "batch_size": batch_size, "optimizer": "AdamW", "lr": 1e-3, "weight_decay": 1e-4, "K": 10}
-    cache_hash = hashlib.sha256(cache.read_bytes()).hexdigest()
+    cache_hash = file_sha256(cache)
     if source_metadata.get("cache_sha256") != cache_hash:
         raise ValueError("teacher cache hash does not match metadata")
-    mask_hash = hashlib.sha256(mask.tobytes()).hexdigest(); proxy_hash = hashlib.sha256(indices.tobytes()).hexdigest()
+    mask_hash = array_sha256(mask); proxy_hash = array_sha256(indices)
     run_id = metadata_identity(method=method, temperature=temperature, config=config, source_hash=cache_hash, proxy_hash=proxy_hash, mask_hash=mask_hash)
     target = build_target(logits, labels, mask, method=method, temperature=temperature)
     train_ds, eval_ds, test_ds = datasets_for(dataset, data_dir)
@@ -99,7 +100,9 @@ def distill(*, cache: Path, data_dir: Path, results: Path, method: str, dataset:
     accuracy, nll = _evaluate(model, test_loader(test_ds), dev)
     row = {"run_id": run_id, "dataset": dataset, "regime": source_metadata["regime"], "seed": seed, "method": method, "temperature": temperature, "cache_sha256": cache_hash,
            "M_sha256": mask_hash, "proxy_sha256": proxy_hash, "student_init_sha256": initial_hash, "batch_order_sha256": order.digest.hexdigest(),
-           "student_final_sha256": _hash_state(model.state_dict()), "updates": epochs * len(loader), "student_test_accuracy": accuracy, "student_test_nll": nll, **target.metrics}
+           "student_final_sha256": _hash_state(model.state_dict()), "updates": epochs * len(loader), "student_test_accuracy": accuracy, "student_test_nll": nll,
+           "cache_creation_commit": artifact_commit(source_metadata), "kd_execution_commit": git_commit(), "protocol_version": PROTOCOL_VERSION,
+           **target.metrics}
     _update_table(Path(results), row)
     return row
 

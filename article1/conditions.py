@@ -3,51 +3,36 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 import numpy as np
 
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from article1 import PROTOCOL_VERSION
+from article1.hashes import array_sha256, artifact_commit, file_sha256
 
 
 def _array_hash(*arrays: np.ndarray) -> str:
+    # Compatibility shim for the condition-table's composite holdout hash.
+    import hashlib
     digest = hashlib.sha256()
     for array in arrays:
-        value = np.ascontiguousarray(array)
-        digest.update(str(value.dtype).encode()); digest.update(str(value.shape).encode()); digest.update(value.tobytes())
+        digest.update(array_sha256(array).encode())
     return digest.hexdigest()
 
 
 def _directory_hash(path: Path) -> str:
     digest = hashlib.sha256()
     for child in sorted(path.glob("*.npz")):
-        digest.update(child.name.encode()); digest.update(_sha256(child).encode())
+        digest.update(child.name.encode()); digest.update(file_sha256(child).encode())
     metadata = path / "metadata.json"
-    if metadata.is_file(): digest.update(_sha256(metadata).encode())
+    if metadata.is_file(): digest.update(file_sha256(metadata).encode())
     return digest.hexdigest()
-
-
-def git_commit(root: Path = Path(".")) -> str:
-    try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
 
 
 def condition_rows(source_root: Path, *, git_root: Path = Path(".")) -> list[dict]:
     rows: list[dict] = []
-    commit = git_commit(git_root)
     for dataset in DATASETS:
         for seed in SEEDS:
             for regime in REGIMES:
@@ -72,9 +57,10 @@ def condition_rows(source_root: Path, *, git_root: Path = Path(".")) -> list[dic
                     "classes_without_expert": json.dumps(np.flatnonzero(per_class == 0).astype(int).tolist()),
                     "partition_sha256": _directory_hash(partition_dir),
                     "holdout_sha256": _array_hash(counts, accuracy),
-                    "proxy_sha256": _array_hash(proxy),
+                    "proxy_sha256": array_sha256(proxy),
                     "teachers_sha256": metadata["teacher_fingerprint"],
-                    "git_commit": commit,
+                    "protocol_version": metadata.get("protocol_version", metadata.get("protocol", PROTOCOL_VERSION)),
+                    "artifact_creation_commit": artifact_commit(metadata),
                 })
     return rows
 

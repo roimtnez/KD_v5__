@@ -3,11 +3,16 @@ import pytest
 import csv
 import hashlib
 import json
+from pathlib import Path
 
 from article1.distillation import METHODS, authority_from_holdout, build_target, metadata_identity
 from article1.partitioning import make_partitions, validate_splits
 from article1.audit import audit
 from article1.analysis import paired_effects
+from article1.backfill import backfill
+from article1 import audit as audit_component
+from article1 import conditions as conditions_component
+from article1.hashes import array_sha256
 
 
 def test_holdout_authority_requires_observations():
@@ -87,6 +92,18 @@ def test_target_identity_changes_with_temperature_and_recipe():
     first = metadata_identity(temperature=8, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=2, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=8, config={"epochs": 31}, **common)
+    assert first != metadata_identity(temperature=8, config={"epochs": 30}, **{**common, "source_hash": "other"})
+    assert first != metadata_identity(temperature=8, config={"epochs": 30}, **{**common, "mask_hash": "other"})
+
+
+def test_proxy_hash_is_canonical_across_conditions_runner_and_audit():
+    proxy = np.array([10, 2, 7], dtype=np.int64)
+    expected = array_sha256(proxy)
+    # Each component imports this one canonical implementation rather than
+    # maintaining a subtly different dtype/shape-aware variant.
+    assert "from article1.hashes import array_sha256" in Path("article1/runner.py").read_text()
+    assert expected == conditions_component.array_sha256(proxy)
+    assert expected == audit_component.array_sha256(proxy)
 
 
 def test_analysis_and_audit_keep_temperature_observations_separate(tmp_path):
@@ -119,3 +136,25 @@ def test_audit_accepts_consistent_single_condition(tmp_path):
     with results.open("w", newline="") as handle: writer = csv.DictWriter(handle, fieldnames=row); writer.writeheader(); writer.writerow(row)
     report = audit(results, source_root=tmp_path / "sources", datasets=("mnist",), seeds=(42,), regimes=("iid",), methods=("feddf_logit",))
     assert report["ok"]
+
+
+def test_backfill_only_changes_derived_target_columns_and_supports_dry_run(tmp_path):
+    source = tmp_path / "sources" / "mnist-seed42-iid"; source.mkdir(parents=True)
+    logits = np.array([[[2., 0.], [0., 2.]]], dtype=np.float32)
+    np.savez_compressed(source / "teacher_cache.npz", logits=logits, labels=np.array([0]), M=np.array([[1, 0], [0, 1]], dtype=np.uint8))
+    results = tmp_path / "results.csv"
+    original = {"run_id": "immutable", "dataset": "mnist", "seed": "42", "regime": "iid", "method": "expert_prob",
+                "temperature": "8", "student_test_accuracy": ".5", "student_test_nll": "1.2", "cache_sha256": "cache",
+                "proxy_sha256": "proxy", "M_sha256": "mask", "mean_outside_support_mass": ".1"}
+    with results.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=original); writer.writeheader(); writer.writerow(original)
+    before = results.read_bytes()
+    dry = backfill(results, tmp_path / "sources", dry_run=True)
+    assert dry["dry_run"] and results.read_bytes() == before
+    report = backfill(results, tmp_path / "sources")
+    assert report["changed_rows"] == 1
+    with results.open(newline="") as handle: migrated = next(csv.DictReader(handle))
+    for field in ("run_id", "student_test_accuracy", "student_test_nll", "cache_sha256", "proxy_sha256", "M_sha256", "temperature"):
+        assert migrated[field] == original[field]
+    assert "mean_outside_support_mass" not in migrated
+    assert migrated["effective_teachers"] and migrated["pre_restriction_outside_support_mass"]
