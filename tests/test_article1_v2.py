@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import csv
 import hashlib
 import json
@@ -6,6 +7,7 @@ import json
 from article1.distillation import METHODS, authority_from_holdout, build_target, metadata_identity
 from article1.partitioning import make_partitions, validate_splits
 from article1.audit import audit
+from article1.analysis import paired_effects
 
 
 def test_holdout_authority_requires_observations():
@@ -85,6 +87,22 @@ def test_target_identity_changes_with_temperature_and_recipe():
     first = metadata_identity(temperature=8, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=2, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=8, config={"epochs": 31}, **common)
+
+
+def test_analysis_and_audit_keep_temperature_observations_separate(tmp_path):
+    rows = []
+    for temperature, expert_accuracy in ((4.0, .70), (8.0, .90)):
+        for method, accuracy in (("feddf_logit", .60), ("expert_logit", expert_accuracy)):
+            rows.append({"dataset": "mnist", "regime": "iid", "seed": "42", "method": method,
+                         "temperature": str(temperature), "student_test_accuracy": str(accuracy)})
+    results = tmp_path / "results.csv"
+    with results.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=rows[0]); writer.writeheader(); writer.writerows(rows)
+    effects = paired_effects(results, temperature=8)
+    assert len(effects) == 1
+    assert effects[0]["temperature"] == 8.0
+    assert effects[0]["paired_seeds"] == 1
+    assert effects[0]["mean_accuracy_delta"] == pytest.approx(.3)
 
 
 def test_audit_accepts_consistent_single_condition(tmp_path):

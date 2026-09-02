@@ -4,7 +4,10 @@
 Examples:
     python run_article1_grid.py --device cuda
     python run_article1_grid.py --stage distill --methods expert_logit expert_prob expert_prob_sr
-    python run_article1_grid.py --stage distill --temperatures 1 4 --methods expert_prob expert_prob_sr
+    python run_article1_grid.py \\
+      --stage distill --datasets cifar --regimes iid alpha0p1 single --seeds 42 43 44 \\
+      --methods expert_prob expert_prob_sr --temperatures 1 4 \\
+      --results OUTPUTS/article1/results_temperature.csv
 """
 from __future__ import annotations
 
@@ -46,6 +49,8 @@ def skip(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1"))
+    parser.add_argument("--results", type=Path, help="results CSV (default: OUTPUTS/article1/results.csv)")
+    parser.add_argument("--allow-nondefault-main-results", action="store_true", help="explicitly authorize T!=8 writes to the main CSV")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--device", default="cuda", help="e.g. cuda, cuda:0, or cpu")
     parser.add_argument("--stage", choices=("all", "partition", "teachers", "distill"), default="all")
@@ -63,7 +68,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    results = args.output_root / "results.csv"
+    main_results = args.output_root / "results.csv"
+    results = args.results or main_results
+    if any(float(t) != 8.0 for t in args.temperatures) and results == main_results and not args.allow_nondefault_main_results:
+        raise SystemExit("refusing to write T=1/T=4 sensitivity rows to the main results.csv; use --results OUTPUTS/article1/results_temperature.csv or --allow-nondefault-main-results")
     done = completed_methods(results)
     for dataset in args.datasets:
         for seed in args.seeds:

@@ -35,9 +35,15 @@ def audit(
     results_path: Path, *, source_root: Path,
     datasets: Iterable[str] = DATASETS, seeds: Iterable[int] = SEEDS,
     regimes: Iterable[str] = REGIMES, methods: Iterable[str] = METHODS,
-    temperatures: Iterable[float] = (8.0,),
+    temperature: float = 8.0,
+    sanity_temperatures: Iterable[float] | None = None,
 ) -> dict:
-    """Return a JSON-serializable audit. ``ok`` is false on any invariant error."""
+    """Audit one primary-temperature grid without conflating sensitivity rows.
+
+    ``temperature`` selects the experimental grid to validate (T=8 by
+    default).  ``sanity_temperatures`` only controls pure target
+    reconstruction from immutable caches; it does not alter expected coverage.
+    """
     results_path, source_root = Path(results_path), Path(source_root)
     expected_datasets, expected_seeds = tuple(datasets), tuple(int(x) for x in seeds)
     expected_regimes, expected_methods = tuple(regimes), tuple(methods)
@@ -50,14 +56,21 @@ def audit(
         _issue(issues, "missing_result_columns", columns=sorted(missing_fields))
         return {"ok": False, "rows": len(rows), "issues": issues}
 
-    key_rows: dict[tuple[str, int, str, str], list[dict]] = defaultdict(list)
+    requested_temperature = float(temperature)
+    sanity_temperatures = tuple(float(x) for x in (
+        sanity_temperatures if sanity_temperatures is not None else (requested_temperature,)
+    ))
+    present_temperatures: set[float] = set()
+    key_rows: dict[tuple[str, int, str, str, float], list[dict]] = defaultdict(list)
     run_ids = Counter()
     for row in rows:
         try:
-            key = (row["dataset"], int(row["seed"]), row["regime"], row["method"])
+            observed_temperature = float(row["temperature"])
+            key = (row["dataset"], int(row["seed"]), row["regime"], row["method"], observed_temperature)
         except (KeyError, ValueError):
             _issue(issues, "invalid_result_identity", row=row)
             continue
+        present_temperatures.add(observed_temperature)
         key_rows[key].append(row); run_ids[row["run_id"]] += 1
     for key, matching in key_rows.items():
         if len(matching) != 1: _issue(issues, "duplicate_condition_method", condition=key, rows=len(matching))
@@ -66,11 +79,11 @@ def audit(
 
     conditions = [(d, s, r) for d in expected_datasets for s in expected_seeds for r in expected_regimes]
     for condition in conditions:
-        observed = {method for (*prefix, method) in key_rows if tuple(prefix) == condition}
+        observed = {method for d, s, r, method, t in key_rows if (d, s, r) == condition and t == requested_temperature}
         absent, unexpected = sorted(set(expected_methods) - observed), sorted(observed - set(expected_methods))
         if absent: _issue(issues, "missing_methods", condition=condition, methods=absent)
         if unexpected: _issue(issues, "unexpected_methods", condition=condition, methods=unexpected)
-        arm_rows = [key_rows[(*condition, method)][0] for method in observed if len(key_rows[(*condition, method)]) == 1]
+        arm_rows = [key_rows[(*condition, method, requested_temperature)][0] for method in observed if len(key_rows[(*condition, method, requested_temperature)]) == 1]
         if arm_rows:
             paired = ("cache_sha256", "M_sha256", "proxy_sha256", "student_init_sha256", "batch_order_sha256", "updates", "temperature")
             for field in paired:
@@ -79,9 +92,12 @@ def audit(
         _audit_source(condition, source_root, arm_rows, issues)
 
     expected_rows = len(conditions) * len(expected_methods)
-    sanity = _target_sanity(conditions, source_root, temperatures=tuple(temperatures), issues=issues)
-    return {"ok": not issues, "rows": len(rows), "expected_rows": expected_rows,
-            "target_sanity": sanity,
+    primary_rows = sum(len(matching) for (*_, t), matching in key_rows.items() if t == requested_temperature)
+    sanity = _target_sanity(conditions, source_root, temperatures=sanity_temperatures, issues=issues)
+    return {"ok": not issues, "rows": len(rows), "primary_rows": primary_rows, "expected_rows": expected_rows,
+            "primary_temperature": requested_temperature,
+            "result_temperatures": sorted(present_temperatures),
+            "target_sanity_temperatures": list(sanity_temperatures), "target_sanity": sanity,
             "conditions": len(conditions), "methods": len(expected_methods), "issues": issues}
 
 
@@ -161,10 +177,12 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS))
     parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
     parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
-    parser.add_argument("--temperatures", nargs="+", type=float, default=[8.0], help="target-sanity temperatures")
+    parser.add_argument("--temperature", type=float, default=8.0, help="primary grid temperature (default: 8)")
+    parser.add_argument("--sanity-temperatures", nargs="+", type=float, help="temperatures used only to reconstruct target sanity checks")
     args = parser.parse_args()
     report = audit(args.results, source_root=args.source_root, datasets=args.datasets, seeds=args.seeds,
-                   regimes=args.regimes, methods=args.methods, temperatures=args.temperatures)
+                   regimes=args.regimes, methods=args.methods, temperature=args.temperature,
+                   sanity_temperatures=args.sanity_temperatures)
     print(json.dumps(report, indent=2, sort_keys=True))
     if not report["ok"]: raise SystemExit(1)
 
