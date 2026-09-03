@@ -3,6 +3,7 @@ import pytest
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 
 from article1.distillation import METHODS, authority_from_holdout, build_target, metadata_identity
@@ -13,6 +14,7 @@ from article1.backfill import backfill
 from article1 import audit as audit_component
 from article1 import conditions as conditions_component
 from article1.hashes import array_sha256
+from article1.local_training import configure_determinism
 
 
 def test_holdout_authority_requires_observations():
@@ -33,6 +35,17 @@ def test_new_partitions_record_protocol_and_creation_commit(tmp_path):
     metadata = json.loads((tmp_path / "partition" / "metadata.json").read_text())
     assert metadata["protocol_version"] == "article1-v2"
     assert metadata["creation_commit"] != "unknown"
+
+
+def test_deterministic_execution_contract_is_enabled():
+    import torch
+
+    configure_determinism()
+    assert torch.are_deterministic_algorithms_enabled()
+    assert not torch.backends.cudnn.benchmark
+    assert torch.backends.cudnn.deterministic
+    assert not torch.backends.cuda.matmul.allow_tf32
+    assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
 
 
 def test_splits_reserve_proxy_and_are_disjoint():

@@ -3,6 +3,11 @@
 The package has one active target implementation: :mod:`article1.distillation`.
 It deliberately does not read historical Article-1 artifacts.
 """
+import os
+
+# CuBLAS reads this before the first CUDA operation.  Package initialization
+# precedes imports of runner/local_training, so all Article-1 CLIs see it.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 PROTOCOL_VERSION = "article1-v2"
 DATASETS = ("mnist", "fmnist", "cifar")

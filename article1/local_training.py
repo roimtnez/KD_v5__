@@ -19,7 +19,17 @@ from article1.partitioning import validate_splits
 from article1.hashes import file_sha256, git_commit
 
 
+def configure_determinism() -> None:
+    """Make the fixed Article-1 recipe bitwise reproducible on CUDA or CPU."""
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+
 def _seed(seed: int) -> None:
+    configure_determinism()
     np.random.seed(seed); torch.manual_seed(seed)
     if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
