@@ -19,6 +19,7 @@ from pathlib import Path
 
 from article1 import DATASETS, REGIMES, SEEDS
 from article1.distillation import METHODS
+from article1.rq2 import RQ2_DATASET, RQ2_METHODS, RQ2_REGIMES, RQ2_SEEDS, reusable_cells
 
 
 def command(*arguments: object) -> list[str]:
@@ -50,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1"))
     parser.add_argument("--results", type=Path, help="results CSV (default: OUTPUTS/article1/results.csv)")
+    parser.add_argument("--reuse-results", type=Path, nargs="*", default=[], help="validated result CSVs whose completed RQ2 cells may be reused")
+    parser.add_argument("--rq2-temperature-sweep", action="store_true", help="enforce the isolated CIFAR EXPERT logit/prob T=1,4 design")
     parser.add_argument("--allow-nondefault-main-results", action="store_true", help="explicitly authorize T!=8 writes to the main CSV")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--device", default="cuda", help="e.g. cuda, cuda:0, or cpu")
@@ -72,7 +75,23 @@ def main() -> None:
     results = args.results or main_results
     if any(float(t) != 8.0 for t in args.temperatures) and results == main_results and not args.allow_nondefault_main_results:
         raise SystemExit("refusing to write T=1/T=4 sensitivity rows to the main results.csv; use --results OUTPUTS/article1/results_temperature.csv or --allow-nondefault-main-results")
-    done = completed_methods(results)
+    if args.rq2_temperature_sweep:
+        expected = (args.datasets == [RQ2_DATASET] and tuple(args.regimes) == RQ2_REGIMES and tuple(args.seeds) == RQ2_SEEDS
+                    and tuple(args.methods) == RQ2_METHODS and tuple(map(float, args.temperatures)) == (1.0, 4.0))
+        if not expected or args.stage != "distill":
+            raise SystemExit("--rq2-temperature-sweep requires exactly cifar, iid alpha0p1 single, seeds 42 43 44, expert_logit expert_prob, T=1 4, and --stage distill")
+        if results == main_results:
+            raise SystemExit("RQ2 temperature results must use an isolated CSV")
+        reuse_paths = [results, *args.reuse_results]
+        reusable = reusable_cells(reuse_paths, source_root=args.output_root / "sources", temperatures=args.temperatures)
+        # The generic RQ2 verifier uses dataset/regime/seed identities, while
+        # this legacy launcher iterates dataset/seed/regime.
+        done = {(dataset, seed, regime, method, temperature)
+                for dataset, regime, seed, method, temperature in reusable}
+        total = len(args.regimes) * len(args.seeds) * len(args.methods) * len(args.temperatures)
+        print(f"# RQ2 preflight: expected={total} reusable={len(done)} pending={total - len(done)}", flush=True)
+    else:
+        done = completed_methods(results)
     for dataset in args.datasets:
         for seed in args.seeds:
             for regime in args.regimes:

@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 from article1.distillation import METHODS, authority_from_holdout, build_target, metadata_identity
@@ -15,6 +16,9 @@ from article1 import audit as audit_component
 from article1 import conditions as conditions_component
 from article1.hashes import array_sha256
 from article1.local_training import configure_determinism
+from article1.hashes import file_sha256
+from article1.rq2 import validate_cells
+import run_article1_grid as grid
 
 
 def test_holdout_authority_requires_observations():
@@ -46,6 +50,47 @@ def test_deterministic_execution_contract_is_enabled():
     assert torch.backends.cudnn.deterministic
     assert not torch.backends.cuda.matmul.allow_tf32
     assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
+
+
+def _write_rq2_reuse_fixture(tmp_path: Path) -> Path:
+    source = tmp_path / "sources" / "cifar-seed42-iid"; source.mkdir(parents=True)
+    logits = np.array([[[2., 0.]], [[0., 2.]]], dtype=np.float32)
+    labels, mask, proxy = np.array([0, 1]), np.ones((1, 2), dtype=np.uint8), np.array([4, 5])
+    np.savez_compressed(source / "teacher_cache.npz", logits=logits, labels=labels, M=mask, proxy_idx=proxy)
+    digest = file_sha256(source / "teacher_cache.npz")
+    (source / "metadata.json").write_text(json.dumps({"protocol": "article1-v2", "cache_sha256": digest}))
+    target = build_target(logits, labels, mask, method="expert_prob", temperature=1)
+    row = {"dataset": "cifar", "regime": "iid", "seed": "42", "method": "expert_prob", "temperature": "1",
+           "cache_sha256": digest, "M_sha256": array_sha256(mask), "proxy_sha256": array_sha256(proxy),
+           **{name: "" if value is None else str(value) for name, value in target.metrics.items()}}
+    results = tmp_path / "reuse.csv"
+    with results.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=row); writer.writeheader(); writer.writerow(row)
+    return results
+
+
+def test_rq2_reuse_requires_a_cache_valid_temperature_identity(tmp_path):
+    results = _write_rq2_reuse_fixture(tmp_path)
+    report = validate_cells([results], source_root=tmp_path / "sources", temperatures=[1, 4])
+    assert report["ok"]
+    assert report["counts"]["valid_reusable"] == 1
+    assert report["counts"]["absent"] == 35
+    assert not report["counts"]["duplicated"] and not report["counts"]["incompatible"]
+
+
+def test_rq2_dry_run_uses_isolated_output_and_skips_valid_reuse(tmp_path, monkeypatch):
+    reuse = _write_rq2_reuse_fixture(tmp_path)
+    output_root = tmp_path
+    calls = []
+    monkeypatch.setattr(grid, "run", lambda arguments, *, dry_run: calls.append((arguments, dry_run)))
+    monkeypatch.setattr(sys, "argv", ["run_article1_grid.py", "--stage", "distill", "--rq2-temperature-sweep",
+        "--output-root", str(output_root), "--results", str(output_root / "results_rq2_temperature.csv"),
+        "--reuse-results", str(reuse), "--datasets", "cifar", "--regimes", "iid", "alpha0p1", "single",
+        "--seeds", "42", "43", "44", "--methods", "expert_logit", "expert_prob", "--temperatures", "1", "4", "--dry-run"])
+    grid.main()
+    assert len(calls) == 35
+    assert all(dry_run and str(output_root / "results_rq2_temperature.csv") in command for command, dry_run in calls)
+    assert not (output_root / "results_rq2_temperature.csv").exists()
 
 
 def test_splits_reserve_proxy_and_are_disjoint():
