@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements-analysis.txt
 pytest==9.0.3

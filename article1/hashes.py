@@ -1,4 +1,5 @@
 """Canonical, stable hashes for Article-1 artifacts."""
+
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +31,9 @@ def array_sha256(array: np.ndarray) -> str:
 def git_commit(root: Path = Path(".")) -> str:
     """Return the creating source revision, never a guessed replacement."""
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 

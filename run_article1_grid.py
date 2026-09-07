@@ -1,25 +1,20 @@
 #!/usr/bin/env python3
-"""Launch the Article-1 grid without maintaining a shell script.
+"""Explicit partition/teacher/KD stages; reuse only identical cached KD recipes."""
 
-Examples:
-    python run_article1_grid.py --device cuda
-    python run_article1_grid.py --stage distill --methods expert_logit expert_prob expert_prob_sr
-    python run_article1_grid.py \\
-      --stage distill --datasets cifar --regimes iid alpha0p1 single --seeds 42 43 44 \\
-      --methods expert_prob expert_prob_sr --temperatures 1 4 \\
-      --results OUTPUTS/article1/results_temperature.csv
-"""
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from article1 import DATASETS, REGIMES, SEEDS
-from article1.distillation import METHODS
-from article1.rq2 import RQ2_DATASET, RQ2_METHODS, RQ2_REGIMES, RQ2_SEEDS, reusable_cells
+from article1.distillation import METHODS, kd_config, metadata_identity
+from article1.hashes import array_sha256, file_sha256
 
 
 def command(*arguments: object) -> list[str]:
@@ -32,66 +27,86 @@ def run(arguments: list[str], *, dry_run: bool) -> None:
         subprocess.run(arguments, check=True)
 
 
-def completed_methods(results: Path) -> set[tuple[str, int, str, str, float]]:
-    """Read completed default-grid arms without trusting historical outputs."""
-    if not results.is_file():
-        return set()
-    with results.open(newline="", encoding="utf-8") as handle:
-        return {
-            (row["dataset"], int(row["seed"]), row["regime"], row["method"], float(row["temperature"]))
-            for row in csv.DictReader(handle)
-        }
+def completed_run_ids(paths: list[Path]) -> set[str]:
+    """Collect recorded executions; ambiguity is an error, not a silent skip."""
+    found: set[str] = set()
+    for path in dict.fromkeys(p.resolve() for p in paths):
+        if not path.is_file():
+            continue
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                run_id = row.get("run_id")
+                if not run_id or run_id in found:
+                    raise ValueError(f"missing or duplicate run_id in {path}: {run_id}")
+                found.add(run_id)
+    return found
 
 
-def skip(message: str) -> None:
-    print(f"# skip: {message}", flush=True)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1"))
-    parser.add_argument("--results", type=Path, help="results CSV (default: OUTPUTS/article1/results.csv)")
-    parser.add_argument("--reuse-results", type=Path, nargs="*", default=[], help="validated result CSVs whose completed RQ2 cells may be reused")
-    parser.add_argument("--rq2-temperature-sweep", action="store_true", help="enforce the isolated CIFAR EXPERT logit/prob T=1,4 design")
-    parser.add_argument("--allow-nondefault-main-results", action="store_true", help="explicitly authorize T!=8 writes to the main CSV")
-    parser.add_argument("--data-dir", type=Path, default=Path("data"))
-    parser.add_argument("--device", default="cuda", help="e.g. cuda, cuda:0, or cpu")
-    parser.add_argument("--stage", choices=("all", "partition", "teachers", "distill"), default="all")
-    parser.add_argument("--datasets", nargs="+", choices=DATASETS, default=list(DATASETS))
-    parser.add_argument("--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS))
-    parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
-    parser.add_argument("--temperatures", nargs="+", type=float, default=[8.0])
-    parser.add_argument("--proxy-size", type=int, default=10_000)
-    parser.add_argument("--teacher-epochs", type=int, default=50)
-    parser.add_argument("--student-epochs", type=int, default=30)
-    parser.add_argument("--dry-run", action="store_true", help="print commands without running them")
-    return parser.parse_args()
+def cache_identity(cache: Path) -> dict:
+    """Fingerprint the actual cache, not just its dataset/regime filename."""
+    metadata = json.loads(cache.with_name("metadata.json").read_text())
+    digest = file_sha256(cache)
+    if metadata.get("cache_sha256") != digest:
+        raise ValueError(f"cache hash differs from metadata: {cache}")
+    with np.load(cache, allow_pickle=False) as data:
+        return dict(
+            source_hash=digest,
+            proxy_hash=array_sha256(data["proxy_idx"]),
+            mask_hash=array_sha256(data["M"]),
+        )
 
 
 def main() -> None:
-    args = parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1"))
+    parser.add_argument(
+        "--results",
+        type=Path,
+        help="default: <output-root>/results.csv; T!=8 requires another file",
+    )
+    parser.add_argument(
+        "--reuse-results",
+        type=Path,
+        nargs="*",
+        default=[],
+        help="additional CSVs with completed run IDs",
+    )
+    parser.add_argument("--data-dir", type=Path, default=Path("data"))
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--stage", choices=("all", "partition", "teachers", "distill"), default="all"
+    )
+    parser.add_argument(
+        "--datasets", nargs="+", choices=DATASETS, default=list(DATASETS)
+    )
+    parser.add_argument(
+        "--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS)
+    )
+    parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument("--temperatures", nargs="+", type=float, default=[8.0])
+    parser.add_argument(
+        "--proxy-size",
+        type=int,
+        default=10_000,
+        help="partition stage only; NOT a proxy-size KD ablation",
+    )
+    parser.add_argument("--teacher-epochs", type=int, default=50)
+    parser.add_argument("--student-epochs", type=int, default=30)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if any(not np.isfinite(t) or t <= 0 for t in args.temperatures):
+        parser.error("temperatures must be positive and finite")
+    if min(args.teacher_epochs, args.student_epochs) <= 0:
+        parser.error("epoch budgets must be positive")
     main_results = args.output_root / "results.csv"
     results = args.results or main_results
-    if any(float(t) != 8.0 for t in args.temperatures) and results == main_results and not args.allow_nondefault_main_results:
-        raise SystemExit("refusing to write T=1/T=4 sensitivity rows to the main results.csv; use --results OUTPUTS/article1/results_temperature.csv or --allow-nondefault-main-results")
-    if args.rq2_temperature_sweep:
-        expected = (args.datasets == [RQ2_DATASET] and tuple(args.regimes) == RQ2_REGIMES and tuple(args.seeds) == RQ2_SEEDS
-                    and tuple(args.methods) == RQ2_METHODS and tuple(map(float, args.temperatures)) == (1.0, 4.0))
-        if not expected or args.stage != "distill":
-            raise SystemExit("--rq2-temperature-sweep requires exactly cifar, iid alpha0p1 single, seeds 42 43 44, expert_logit expert_prob, T=1 4, and --stage distill")
-        if results == main_results:
-            raise SystemExit("RQ2 temperature results must use an isolated CSV")
-        reuse_paths = [results, *args.reuse_results]
-        reusable = reusable_cells(reuse_paths, source_root=args.output_root / "sources", temperatures=args.temperatures)
-        # The generic RQ2 verifier uses dataset/regime/seed identities, while
-        # this legacy launcher iterates dataset/seed/regime.
-        done = {(dataset, seed, regime, method, temperature)
-                for dataset, regime, seed, method, temperature in reusable}
-        total = len(args.regimes) * len(args.seeds) * len(args.methods) * len(args.temperatures)
-        print(f"# RQ2 preflight: expected={total} reusable={len(done)} pending={total - len(done)}", flush=True)
-    else:
-        done = completed_methods(results)
+    if (
+        any(t != 8 for t in args.temperatures)
+        and results.resolve() == main_results.resolve()
+    ):
+        parser.error("T!=8 requires --results pointing to a separate CSV")
+    done = completed_run_ids([results, *args.reuse_results])
     for dataset in args.datasets:
         for seed in args.seeds:
             for regime in args.regimes:
@@ -99,37 +114,98 @@ def main() -> None:
                 partitions = args.output_root / "partitions" / key
                 source = args.output_root / "sources" / key
                 cache = source / "teacher_cache.npz"
-
-                if args.stage in {"all", "partition"}:
-                    if (partitions / "metadata.json").is_file():
-                        skip(f"partition {key} already exists")
-                    else:
-                        run(command(
-                            "partition", "--dataset", dataset, "--seed", seed, "--regime", regime,
-                            "--data-dir", args.data_dir, "--output", partitions,
-                            "--proxy-size", args.proxy_size,
-                        ), dry_run=args.dry_run)
-                if args.stage in {"all", "teachers"}:
-                    if cache.is_file() and (source / "metadata.json").is_file():
-                        skip(f"teacher cache {key} already exists")
-                    else:
-                        run(command(
-                            "teachers", "--dataset", dataset, "--seed", seed, "--regime", regime,
-                            "--data-dir", args.data_dir, "--partitions", partitions, "--output", source,
-                            "--epochs", args.teacher_epochs, "--device", args.device,
-                        ), dry_run=args.dry_run)
-                if args.stage in {"all", "distill"}:
-                    for temperature in args.temperatures:
-                        for method in args.methods:
-                            identity = (dataset, seed, regime, method, temperature)
-                            if identity in done:
-                                skip(f"distill {dataset}-seed{seed}-{regime}-{method}-T{temperature:g} already recorded")
-                            else:
-                                run(command(
-                                    "distill", "--dataset", dataset, "--seed", seed, "--method", method,
-                                    "--cache", cache, "--data-dir", args.data_dir, "--results", results,
-                                    "--temperature", temperature, "--epochs", args.student_epochs, "--device", args.device,
-                                ), dry_run=args.dry_run)
+                if (
+                    args.stage in {"all", "partition"}
+                    and not (partitions / "metadata.json").is_file()
+                ):
+                    run(
+                        command(
+                            "partition",
+                            "--dataset",
+                            dataset,
+                            "--seed",
+                            seed,
+                            "--regime",
+                            regime,
+                            "--data-dir",
+                            args.data_dir,
+                            "--output",
+                            partitions,
+                            "--proxy-size",
+                            args.proxy_size,
+                        ),
+                        dry_run=args.dry_run,
+                    )
+                if args.stage in {"all", "teachers"} and not (
+                    cache.is_file() and cache.with_name("metadata.json").is_file()
+                ):
+                    run(
+                        command(
+                            "teachers",
+                            "--dataset",
+                            dataset,
+                            "--seed",
+                            seed,
+                            "--regime",
+                            regime,
+                            "--data-dir",
+                            args.data_dir,
+                            "--partitions",
+                            partitions,
+                            "--output",
+                            source,
+                            "--epochs",
+                            args.teacher_epochs,
+                            "--device",
+                            args.device,
+                        ),
+                        dry_run=args.dry_run,
+                    )
+                if args.stage not in {"all", "distill"}:
+                    continue
+                fingerprint = cache_identity(cache) if cache.is_file() else None
+                for temperature in args.temperatures:
+                    for method in args.methods:
+                        run_id = (
+                            metadata_identity(
+                                method=method,
+                                temperature=temperature,
+                                config=kd_config(args.student_epochs),
+                                **fingerprint,
+                            )
+                            if fingerprint
+                            else None
+                        )
+                        if run_id in done:
+                            print(
+                                f"# skip identical recipe: {key}/{method}/T={temperature:g}",
+                                flush=True,
+                            )
+                            continue
+                        run(
+                            command(
+                                "distill",
+                                "--dataset",
+                                dataset,
+                                "--seed",
+                                seed,
+                                "--method",
+                                method,
+                                "--cache",
+                                cache,
+                                "--data-dir",
+                                args.data_dir,
+                                "--results",
+                                results,
+                                "--temperature",
+                                temperature,
+                                "--epochs",
+                                args.student_epochs,
+                                "--device",
+                                args.device,
+                            ),
+                            dry_run=args.dry_run,
+                        )
 
 
 if __name__ == "__main__":

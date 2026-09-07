@@ -1,8 +1,5 @@
 # Validated Article-1 runtime environment.
-numpy==2.3.5
+-r requirements-analysis.txt
 torch==2.9.1
 torchvision==0.24.1
-pandas==2.3.3
-matplotlib==3.10.8
-seaborn==0.13.2
 jupyter>=1.1,<2
