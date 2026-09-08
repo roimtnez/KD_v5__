@@ -16,7 +16,7 @@ from article1.analysis import CRN, paired
 from article1.audit import audit
 from article1.distillation import (
     METHODS,
-    authority_from_holdout,
+    authority_from_expertise,
     build_target,
     kd_config,
     metadata_identity,
@@ -27,16 +27,16 @@ from article1.rq2 import validate_cells
 
 
 def test_holdout_authority_requires_observations():
-    M = authority_from_holdout(np.array([[0.99, 0.99]]), np.array([[2, 0]]), 0.9)
+    M = authority_from_expertise(np.array([[0.99, 0.99]]), np.array([[2, 0]]), 0.9)
     assert M.tolist() == [[1, 0]]
 
 
-def test_M_is_reconstructible_from_holdout_only():
+def test_M_is_reconstructible_from_expertise_only():
     accuracy = np.array([[0.9, 0.1], [0.2, 0.95]])
     counts = np.array([[4, 4], [4, 4]])
-    cached = authority_from_holdout(accuracy, counts, 0.8)
+    cached = authority_from_expertise(accuracy, counts, 0.8)
     np.testing.assert_array_equal(
-        cached, authority_from_holdout(accuracy.copy(), counts.copy(), 0.8)
+        cached, authority_from_expertise(accuracy.copy(), counts.copy(), 0.8)
     )
 
 
@@ -45,18 +45,19 @@ def test_new_partitions_record_protocol_and_creation_commit(tmp_path):
     clients = [
         {
             "train_idx": np.array([2]),
-            "holdout_idx": np.array([3]),
-            "test_idx": np.array([4]),
+            "validation_idx": np.array([3]),
+            "expertise_idx": np.array([4]),
         }
     ]
     save_partitions(
         tmp_path / "partition",
         proxy_idx=proxy,
         clients=clients,
+        labels=np.arange(5, dtype=np.int64),
         metadata={"dataset": "mnist"},
     )
     metadata = json.loads((tmp_path / "partition" / "metadata.json").read_text())
-    assert metadata["protocol_version"] == "article1-v2"
+    assert metadata["protocol_version"] == "article1-v3"
     assert metadata["creation_commit"] != "unknown"
 
 
@@ -91,7 +92,7 @@ def _write_rq2_reuse_fixture(tmp_path: Path) -> Path:
     )
     digest = file_sha256(source / "teacher_cache.npz")
     (source / "metadata.json").write_text(
-        json.dumps({"protocol": "article1-v2", "cache_sha256": digest})
+        json.dumps({"protocol": "article1-v3", "cache_sha256": digest})
     )
     target = build_target(logits, labels, mask, method="expert_prob", temperature=1)
     row = {
@@ -128,7 +129,7 @@ def test_rq2_reuse_requires_a_cache_valid_temperature_identity(tmp_path):
 
 
 def test_splits_reserve_proxy_and_are_disjoint():
-    labels = np.repeat(np.arange(10), 40)
+    labels = np.repeat(np.arange(10), 400)
     proxy, clients = make_partitions(
         labels, regime="alpha0p5", seed=42, clients=10, proxy_size=100
     )
@@ -226,9 +227,12 @@ def test_oracle_uses_correct_teacher_outputs_not_artificial_one_hot():
 
 
 def test_target_identity_changes_with_temperature_and_recipe():
-    common = dict(
-        method="feddf_logit", source_hash="source", proxy_hash="proxy", mask_hash="mask"
-    )
+    common = {
+        "method": "feddf_logit",
+        "source_hash": "source",
+        "proxy_hash": "proxy",
+        "mask_hash": "mask",
+    }
     first = metadata_identity(temperature=8, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=2, config={"epochs": 30}, **common)
     assert first != metadata_identity(temperature=8, config={"epochs": 31}, **common)
@@ -295,8 +299,8 @@ def test_audit_accepts_consistent_single_condition(tmp_path):
         labels=np.array([0, 1]),
         logits=logits,
         M=mask,
-        holdout_accuracy=np.ones((1, 2)),
-        holdout_counts=np.ones((1, 2)),
+        expertise_accuracy=np.ones((1, 2)),
+        expertise_counts=np.ones((1, 2)),
     )
     cache_hash = hashlib.sha256((source / "teacher_cache.npz").read_bytes()).hexdigest()
     (source / "metadata.json").write_text(
@@ -306,6 +310,7 @@ def test_audit_accepts_consistent_single_condition(tmp_path):
                 "seed": 42,
                 "regime": "iid",
                 "cache_sha256": cache_hash,
+                "protocol": "article1-v3",
             }
         )
     )
@@ -372,7 +377,7 @@ def test_grid_reuses_exact_recipe_but_not_changed_epoch_budget(tmp_path, monkeyp
     cache = source / "teacher_cache.npz"
     np.savez(cache, M=np.ones((1, 2), dtype=np.uint8), proxy_idx=np.array([1, 2]))
     (source / "metadata.json").write_text(
-        json.dumps({"cache_sha256": file_sha256(cache)})
+        json.dumps({"cache_sha256": file_sha256(cache), "protocol": "article1-v3"})
     )
     run_id = metadata_identity(
         method="expert_logit",

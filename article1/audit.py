@@ -10,13 +10,13 @@ import argparse
 import csv
 import json
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
-from article1.distillation import METHODS, authority_from_holdout, build_target
+from article1.distillation import METHODS, authority_from_expertise, build_target
 from article1.hashes import array_sha256, artifact_commit, file_sha256
 
 
@@ -300,7 +300,7 @@ def _audit_source(
     if metadata.get("cache_sha256") != digest:
         _issue(issues, "cache_metadata_hash_mismatch", condition=condition)
     declared_protocol = metadata.get("protocol_version", metadata.get("protocol"))
-    if declared_protocol not in {None, "article1-v2"}:
+    if declared_protocol != "article1-v3":
         _issue(
             issues,
             "unsupported_source_protocol",
@@ -316,7 +316,7 @@ def _audit_source(
                 condition=condition,
                 method=row["method"],
             )
-        if row.get("protocol_version") and row["protocol_version"] != "article1-v2":
+        if row.get("protocol_version") and row["protocol_version"] != "article1-v3":
             _issue(
                 issues,
                 "result_protocol_mismatch",
@@ -339,8 +339,8 @@ def _audit_source(
             "labels",
             "logits",
             "M",
-            "holdout_accuracy",
-            "holdout_counts",
+            "expertise_accuracy",
+            "expertise_counts",
         }
         absent = needed - set(cache.files)
         if absent:
@@ -358,11 +358,11 @@ def _audit_source(
             or not np.isfinite(logits).all()
         ):
             _issue(issues, "invalid_proxy_logits_or_M_shape", condition=condition)
-        expected_mask = authority_from_holdout(
-            cache["holdout_accuracy"], cache["holdout_counts"], THRESHOLDS[dataset]
+        expected_mask = authority_from_expertise(
+            cache["expertise_accuracy"], cache["expertise_counts"], THRESHOLDS[dataset]
         )
         if not np.array_equal(mask, expected_mask):
-            _issue(issues, "M_not_reproducible_from_holdout", condition=condition)
+            _issue(issues, "M_not_reproducible_from_expertise", condition=condition)
         m_hash = array_sha256(mask)
         p_hash = array_sha256(cache["proxy_idx"])
         for row in arm_rows:
@@ -386,7 +386,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
     parser.add_argument(
-        "--source-root", type=Path, default=Path("OUTPUTS/article1/sources")
+        "--source-root", type=Path, default=Path("OUTPUTS/article1_v3/sources")
     )
     parser.add_argument(
         "--datasets", nargs="+", choices=DATASETS, default=list(DATASETS)

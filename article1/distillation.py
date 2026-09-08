@@ -59,7 +59,7 @@ def softmax(logits: np.ndarray, temperature: float = 1.0) -> np.ndarray:
     return e / e.sum(axis=-1, keepdims=True)
 
 
-def authority_from_holdout(
+def authority_from_expertise(
     accuracy: np.ndarray,
     counts: np.ndarray,
     threshold: float,
@@ -68,7 +68,7 @@ def authority_from_holdout(
     accuracy = np.asarray(accuracy, dtype=np.float64)
     counts = np.asarray(counts, dtype=np.int64)
     if accuracy.ndim != 2 or accuracy.shape != counts.shape or (counts < 0).any():
-        raise ValueError("holdout accuracy/counts must be aligned [K,C]")
+        raise ValueError("expertise accuracy/counts must be aligned [K,C]")
     if not 0 <= threshold <= 1:
         raise ValueError("threshold must be in [0,1]")
     return ((counts > 0) & (accuracy >= threshold)).astype(np.uint8)
@@ -123,7 +123,7 @@ def _routing(
         selected = z.argmax(axis=2) == vote[:, None]
     elif method.startswith("expert"):
         if m is None:
-            raise ValueError(f"{method} requires M estimated from holdout")
+            raise ValueError(f"{method} requires M estimated from expertise")
         selected = m[:, y].T.astype(bool)
     elif method.startswith("oracle"):
         selected = z.argmax(axis=2) == y[:, None]

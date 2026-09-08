@@ -59,7 +59,7 @@ def main() -> None:
     parser.add_argument(
         "--results",
         type=Path,
-        default=Path("OUTPUTS/article1/reproducibility_check.csv"),
+        default=Path("OUTPUTS/article1_v3/reproducibility_check.csv"),
     )
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--temperature", type=float, default=8.0)

@@ -1,178 +1,161 @@
-# KD_v5 — Artículo 1: expertise en one-shot federated distillation
+# KD_v5__ — Article 1
 
-**Estado actualizado: 7 de septiembre de 2026.** Este README es la única documentación del repositorio. El notebook contiene análisis ejecutable; las decisiones científicas, instrucciones y tareas pendientes se mantienen aquí.
+Repositorio pequeño de investigación sobre **one-shot federated knowledge distillation**. El objetivo es determinar qué aporta una máscara de competencia cliente–clase y cómo deben contribuir los expertos al target del estudiante global.
 
-El proyecto estudia cómo construir un ensemble teacher útil cuando los modelos locales se especializan en distintas clases. La hipótesis de partida es que disponer de información de competencia cliente–clase puede mejorar la destilación frente a agregar todos los teachers uniformemente. El éxito consiste en responder la pregunta con comparaciones controladas, no en conseguir que EXPERT gane siempre.
+**Estado: 2026-09-08. Protocolo activo: `article1-v3`.** Esta versión cambia el reparto local a `train / validation / expertise = 70/10/20`, con estratificación por clase y estimación de expertise independiente de la selección del checkpoint. No contiene resultados científicos nuevos de v3. Los resultados previos de v2 son evidencia histórica; no se atribuyen al nuevo protocolo.
 
-Título provisional: **Who and What to Teach: Expertise-Aware Ensemble Distillation under Client Specialization**.
+## 1. Alcance del artículo
 
-## 1. Alcance acordado del Artículo 1
+- MNIST, Fashion-MNIST y CIFAR-10; 10 clientes; seeds 42, 43 y 44.
+- Un entrenamiento local por teacher, un cache común de salidas sobre el proxy y un único student global. Sin rondas posteriores de comunicación.
+- Proxy público etiquetado y máscara binaria disponibles. EXPERT no es label-free.
+- Umbrales previos: MNIST 0.90, Fashion-MNIST 0.80, CIFAR-10 0.70. No se declaran óptimos ni se ajustan sobre test para mejorar resultados o eliminar fallbacks.
+- Tres contrastes controlados y una comparación adicional frente al entrenamiento supervisado con las etiquetas del mismo proxy.
 
-Se estudia una **versión base y simple** de la propuesta:
-
-- One-shot: un entrenamiento local por teacher, sin rondas federadas posteriores.
-- 10 clientes, un proxy público y un único estudiante global.
-- Se asume disponibilidad de **etiquetas del proxy y máscara de competencia**. EXPERT utiliza ambas; no es label-free.
-- Máscara binaria estimada en holdout, con umbrales fijados previamente. No se eligen a partir del test ni se ajustan para eliminar fallbacks.
-- Se mantienen tres contrastes principales: selección de teachers, logits frente a probabilidades y distribución completa frente a soporte restringido.
-- Se añade al alcance científico la comparación con **entrenamiento supervisado sobre el mismo proxy** y su dependencia del número de muestras. El código admite CE supervisada y subconjuntos de tamaño N con presupuesto emparejado; no existen aún resultados supervisados canónicos en este repositorio.
-
-La inferencia de la máscara a partir del modelo, el routing con proxy sin etiquetas, los estimadores continuos de competencia y la segunda destilación/personalización se reservan para trabajos posteriores. Una comprobación básica de cobertura y sensibilidad de los umbrales puede formar parte de las limitaciones o robustez de esta versión base; no es una nueva búsqueda para optimizar los resultados del test.
-
-## 2. Preguntas y contrastes controlados
-
-| Pregunta | Comparación principal | Qué se mantiene fijo |
+| Pregunta | Contraste | Se mantiene fijo |
 |---|---|---|
-| RQ1: ¿quién debe contribuir? | `expert_logit − feddf_logit` | Operador de logits, teachers, proxy, inicialización, batches, T y presupuesto KD |
-| RQ2-A: ¿cómo combinar expertos? | `expert_prob − expert_logit` | Routing EXPERT, soporte completo y receta |
-| RQ2-B: ¿qué distribución transmitir? | `expert_prob_sr − expert_prob` | Routing EXPERT, pooling de probabilidades y receta |
+| WHO: quién contribuye | `expert_logit − feddf_logit` | Agregación de logits, teachers, proxy, inicialización, orden y presupuesto |
+| HOW: cómo se agrega | `expert_prob − expert_logit` | Routing EXPERT y temperatura de cada contraste |
+| WHAT: qué soporte se conserva | `expert_prob_sr − expert_prob` | Routing y media de probabilidades |
 
-`oracle_logit − expert_logit` contextualiza la información adicional de selección correcta por muestra. ORACLE es una referencia informada, **no un límite superior garantizado del rendimiento del estudiante**. `oracle_prob − oracle_logit` es un control secundario del espacio de agregación.
+Inferencia de máscaras desde modelos, proxies sin etiquetas, competencia continua y segunda destilación/personalización quedan para trabajos posteriores. Cada nueva variante necesita una pregunta independiente.
 
-EXPERT-logit frente a FedDF-logit separa la regla de selección del operador, pero no separa el valor de la máscara del valor de disponer de etiquetas para consultarla. El presupuesto de información debe ser explícito en el artículo.
+## 2. Reparto entre clientes
 
-## 3. Datasets, especialización y papeles de los datos
+Se reserva primero un proxy de 10.000 ejemplos del entrenamiento oficial, exactamente 1000 por clase. Quedan 50.000 ejemplos privados en MNIST/Fashion-MNIST y 40.000 en CIFAR-10. El test oficial permanece separado.
 
-| Dataset | Identificador CLI | Modelo local y estudiante | Umbral de expertise |
-|---|---|---|---|
-| MNIST | `mnist` | `MnistNet` | 0,90 |
-| Fashion-MNIST | `fmnist` | `MnistNet` | 0,80 |
-| CIFAR-10 | `cifar` | `ResNet9` | 0,70 |
-
-Semillas: **42, 43 y 44**. Eje categórico ordenado: **IID → α=1.0 → α=0.5 → α=0.1 → Multi → Single**. Su separación gráfica uniforme no implica distancias cuantitativas iguales de heterogeneidad. Las figuras conservan una trayectoria continua en los seis regímenes.
-
-`multi` asigna dos clases a cada cliente; `single`, una. Los tres regímenes Dirichlet usan los α indicados. La partición IID reparte cada clase entre clientes. Estas son configuraciones experimentales concretas, no una caracterización universal de toda heterogeneidad.
-
-### Separación de datos
-
-1. Se reserva un proxy balanceado de **10.000 ejemplos del conjunto de entrenamiento oficial**, antes de repartir datos privados.
-2. Cada cliente recibe subconjuntos disjuntos: aproximadamente 65% `train`, 20% `holdout` y 15% `test`, con redondeo de tamaños. La separación local es aleatoria y no estratificada por clase.
-3. `train` optimiza el teacher; `holdout` selecciona su checkpoint y estima competencia; `test` local solo evalúa posteriormente.
-4. El test oficial solo evalúa el estudiante. No interviene en el target, el umbral, KD ni selección de modelos.
-
-Reutilizar el holdout para escoger checkpoint y medir competencia puede producir optimismo por selección. No equivale a disponer de una calibración independiente.
-
-### Preprocesado y modelos
-
-- MNIST y Fashion-MNIST se transforman a 32×32 y tres canales. Ambos usan en el código las constantes de normalización `(0.1307, 0.3081)` por canal; no se estiman nuevas constantes en esta limpieza.
-- CIFAR-10 usa normalización `(0.4914, 0.4822, 0.4465)` / `(0.2470, 0.2435, 0.2616)`. Solo el entrenamiento local añade crop aleatorio y flip horizontal.
-- Holdout, test y proxy usan transformaciones deterministas. KD utiliza la vista de evaluación del proxy.
-- `MnistNet`: tres convoluciones con batch normalization, dos max-pools y clasificador de 256 unidades con dropout 0,3. `ResNet9`: bloques convolucionales y dos bloques residuales. Las definiciones únicas están en `article1/models.py`.
-
-## 4. Máscara: qué representa y qué no
-
-Para teacher k y clase c:
-
-\[
-M_{k,c}=\mathbf 1[n^{holdout}_{k,c}>0\;\land\;Acc^{holdout}_{k,c}\geq\tau_d].
-\]
-
-La métrica es el acierto entre ejemplos cuya clase real es c. No es la precisión entre todas las predicciones emitidas como c. La máscara representa **competencia demostrada según ese criterio**, no exposición exacta durante entrenamiento ni corrección de cada muestra.
-
-Un cero no prueba que toda probabilidad relativa a esa clase sea ruido. Puede haber datos insuficientes, rendimiento por debajo del umbral o información interclase útil que el criterio binario no recoge. Los umbrales son supuestos previos de esta versión, no valores óptimos demostrados.
-
-Es válido que un teacher no tenga ninguna clase experta o que una clase no tenga experto. Se informan cobertura, seleccionados y fallback. No se rebaja retrospectivamente el umbral para mejorar accuracy o forzar cobertura total.
-
-## 5. Métodos: flujo exacto hasta el target
-
-Sean z_k(x) los logits, y(x) la etiqueta del proxy y p_k^T(x)=softmax(z_k(x)/T). Se definen dos operadores:
-
-\[
-L_T(w)=\operatorname{softmax}\left(\frac{\sum_k w_k z_k}{T}\right),\qquad
-P_T(w)=\sum_k w_k\operatorname{softmax}(z_k/T).
-\]
-
-| Identificador | Selección o pesos | Target |
-|---|---|---|
-| `feddf_logit` | Todos, pesos 1/K | L_T(w) |
-| `confidence_logit` | MSP de cada teacher a T=1; softmax entre teachers | L_T(w) |
-| `consensus_logit` | Clase ganadora del promedio de probabilidades a T=1; selecciona teachers cuyo argmax coincide | L_T(w), uniforme entre seleccionados |
-| `energy_logit` | `logsumexp(z_k)` a T=1; softmax entre teachers | L_T(w) |
-| `expert_logit` | Selecciona k si M[k,y]=1 | L_T(w), uniforme entre seleccionados |
-| `oracle_logit` | Selecciona k si argmax(z_k)=y | L_T(w), uniforme entre seleccionados |
-| `expert_prob` | Mismo routing EXPERT | P_T(w) |
-| `oracle_prob` | Mismo routing ORACLE | P_T(w) |
-| `expert_prob_sr` | Mismo routing EXPERT | Máscara y renormalización por teacher antes del promedio de probabilidades |
-
-Para SR:
-
-\[
-p^{SR}_{k,c}=\frac{M_{k,c}p^T_{k,c}}{\sum_jM_{k,j}p^T_{k,j}},\qquad
-q^{SR}=\frac{1}{|S_E|}\sum_{k\in S_E}p^{SR}_k.
-\]
-
-«EXPERT-full» se refiere a conservar el soporte completo; los nombres inequívocos en código son `expert_logit` o `expert_prob`. El contraste full/support usa **`expert_prob` y `expert_prob_sr`**.
-
-Detalles que no deben confundirse:
-
-- Confidence no usa MSP dividido por su suma, sino softmax entre teachers.
-- Consensus no es una moda de etiquetas duras y puede producir una selección vacía.
-- Energy es sensible a escala y offsets aditivos por teacher; sus pesos no demuestran expertise.
-- No hay calibración o normalización implícita de logits. Normalizar a probabilidades no elimina toda sensibilidad a su escala.
-- SR actúa sobre probabilidades individuales; no pone logits a cero. Enmascarar con −∞ antes del softmax es equivalente por teacher, manteniendo después el mismo pooling.
-- No están implementados `class-supported`, ORACLE+SR ni variantes adicionales de selección. `article1-v2` es el identificador del protocolo, no otra familia de métodos.
-
-### Fallback y pérdida
-
-Si EXPERT, ORACLE o Consensus no seleccionan teachers, **todas sus variantes** utilizan el mismo fallback: softmax(mean_k z_k / T), incluido el brazo de probabilidades y SR. Se registra el número de muestras afectadas; no se eliminan.
-
-`article1/distillation.py` es la única implementación de targets. Normaliza el resultado, devuelve probabilidades float32 y la KD las consume directamente:
-
-\[
-\mathcal L_{KD}=T^2D_{KL}\left(q\parallel\operatorname{softmax}(s/T)\right).
-\]
-
-No se aplica un segundo softmax a q. La NLL del estudiante se evalúa con sus logits sin dividir por T. Las métricas del target corresponden a la temperatura de KD.
-
-## 6. Receta y reproducibilidad
-
-Teachers: Adam, lr=1e−3, batch 64, hasta 50 épocas y early stopping con paciencia 5 según accuracy de holdout. Se guarda un checkpoint seleccionado por cliente y un cache común por condición.
-
-KD principal: **T=8**, AdamW, lr=1e−3, weight decay=1e−4, batch 256, 30 épocas. Con proxy de 10.000 ejemplos son **1200 actualizaciones**. Los métodos comparten cache, máscara, índices, inicialización y orden de batches. El código configura algoritmos deterministas y registra hashes de artefactos e identidad de ejecución.
-
-La identidad KD incluye método, temperatura, receta y hashes del cache, máscara y proxy. El lanzador reutiliza una fila únicamente si su run_id coincide con la receta solicitada y el cache actual. Cambiar épocas, temperatura o cache deja de ser la misma ejecución. La existencia de una fila reutilizable no sustituye una auditoría de sus métricas.
-
-La semilla es la unidad de réplica dentro de cada dataset–régimen. Se informan media, SD y puntos emparejados de tres seeds. Ni los clientes ni las combinaciones de datasets/regímenes se tratan como réplicas IID para inferencia.
-
-## 7. Organización del repositorio
-
-| Ruta | Responsabilidad |
+| Régimen | Reparto privado |
 |---|---|
-| `README.md` | Única explicación y registro de decisiones/siguientes pasos |
-| `article1/partitioning.py` | Proxy y particiones disjuntas |
-| `article1/datasets.py`, `models.py` | Datos, transforms y arquitecturas |
-| `article1/local_training.py` | Entrenamiento local, checkpoint y cache |
-| `article1/distillation.py` | Máscara, routing, target y pérdida KD |
-| `article1/runner.py` | CLI: partition, teachers, distill y supervised; runtime común CE/KD |
-| `article1/proxy.py` | Selección anidada y estratificada de filas del proxy reservado |
-| `run_article1_grid.py` | Lanzador explícito, dry-run y reutilización por identidad |
-| `article1/hashes.py` | Huellas comunes y procedencia |
-| `article1/conditions.py` | Tabla de cobertura/procedencia por condición |
-| `article1/audit.py` | Comprobación de caches, máscaras, emparejamiento e invariantes de targets |
-| `article1/rq2.py` | Verificador del experimento de temperatura ya existente |
-| `article1/reproduce.py` | Dos ejecuciones de una celda para comprobar reproducción exacta |
-| `article1/analysis.py` | Validación CSV, tres contrastes, tablas y figuras compartidas |
-| `notebooks/article1_definitive_analysis.ipynb` | Secuencia corta de análisis y exportación |
-| `tests/` | Pruebas rápidas NumPy y runtime sintético CPU, sin descargar datasets |
+| `iid` | Cada clase se divide casi por igual entre los 10 clientes |
+| `alpha1p0`, `alpha0p5`, `alpha0p1` | Proporciones Dirichlet entre clientes para cada clase; también varían los tamaños totales de cliente |
+| `multi` | Cinco pares disjuntos de clases: (0,1), (2,3), (4,5), (6,7), (8,9); dos clientes por par |
+| `single` | Una clase por cliente |
 
-Se mantiene esta estructura pequeña para conservar rutas y caches existentes. No se añade un framework de experimentos.
+El orden gráfico es **IID → α=1.0 → α=0.5 → α=0.1 → Multi → Single**, como eje categórico. No expresa distancias numéricas iguales ni aísla causalmente solo heterogeneidad de clases: Dirichlet también cambia cantidades y `multi` fija parejas concretas.
 
-### Datos y artefactos locales
+Esta revisión mantiene `balanced_order` y `_assign`: no modifica el proxy ni la asignación privada entre clientes para el mismo dataset y seed. Cambia la división dentro de cada cliente.
 
-`data/` y `OUTPUTS/` están excluidos de Git. El repositorio por sí solo **no contiene** los datos, caches ni CSV experimentales. Las rutas canónicas son:
+## 3. Reparto dentro de cada cliente: v3
 
-- `OUTPUTS/article1/partitions/<dataset>-seed<seed>-<regime>/`: `proxy.npz`, `client_*.npz`, `metadata.json`.
-- `OUTPUTS/article1/sources/<condición>/`: `teacher_cache.npz`, `metadata.json`, `teachers/teacher_*.pt`.
-- `OUTPUTS/article1/results.csv`: resultados principales; el análisis selecciona explícitamente T=8.
-- `OUTPUTS/article1/conditions.csv`: 54 filas, sin repetición por método.
-- `OUTPUTS/article1/results_rq2_temperature.csv`: ejecuciones adicionales del estudio focal de temperatura.
-- `OUTPUTS/article1/tables/` y `figures/`: exportaciones derivadas, regenerables.
+| Conjunto | Objetivo por clase | Uso autorizado |
+|---|---:|---|
+| `train_idx` | 70% | Gradientes y actualización de parámetros del teacher |
+| `validation_idx` | 10% | Accuracy global de selección de checkpoint y early stopping |
+| `expertise_idx` | 20% | Accuracy y recuentos por clase del teacher ya seleccionado y congelado; construcción de M |
 
-El cache contiene logits float32 `[N,K,C]`, etiquetas e índices del proxy, M, aciertos/recuentos de holdout y evaluación local posterior. Las salidas históricas sin commit verificable conservan `legacy_unverified`; no se les atribuye el commit actual.
+No existe `test_idx` local en v3. La evaluación final del student utiliza el test oficial. El reparto 70/10/20 es una decisión de diseño, no una proporción demostrada óptima.
 
-## 8. Instalación y uso
+### Estratificación y clases raras
 
-Python 3.11 o posterior. Crear un entorno virtual antes de instalar:
+`article1/partitioning.py::_split_client` baraja los ejemplos de cada clase local usando una RNG por seed/cliente. Calcula los tamaños enteros por **restos mayores** de 70/10/20. Los empates priorizan train, después expertise y después validation. Al terminar se baraja cada split.
+
+- No se equilibran clases entre sí: se preserva aproximadamente la composición de cada cliente.
+- El error de redondeo por clase/split es menor que un ejemplo.
+- No se duplica ningún ejemplo ni se fuerza presencia de una clase en los tres conjuntos.
+- Una clase con un único ejemplo queda en train. Las clases raras pueden carecer de observaciones en validation o expertise.
+- Si un cliente queda con cualquiera de los tres conjuntos completamente vacío, se detiene la preparación con un error. No hay remuestreo ni transferencia silenciosa de datos. Cualquier cambio de política requiere una decisión explícita.
+
+### Invariantes y persistencia
+
+`validate_splits` comprueba índices enteros no negativos, conjuntos locales no vacíos, ausencia de duplicados/solapamientos entre roles, clientes y proxy, y cobertura exacta del entrenamiento oficial.
+
+`save_partitions` guarda `proxy.npz`, diez `client_*.npz` y un `metadata.json` con protocolo, fracciones, regla de redondeo, tamaño/huella de las etiquetas oficiales, commit y manifiesto SHA256 de los archivos de índices. Rechaza directorios no vacíos.
+
+`load_partitions` verifica ese manifiesto, la versión, las funciones de los conjuntos, la cobertura y, cuando se suministran, las etiquetas oficiales. Teachers y notebook utilizan esta misma lectura.
+
+## 4. Entrenamiento, máscara y evaluación
+
+El flujo en `article1/local_training.py::train_and_cache` es:
+
+1. Verificar identidad y huellas de las particiones con las etiquetas de entrenamiento oficial.
+2. Entrenar cada teacher solo con `train` mediante Adam, lr=1e-3, batch 64, máximo 50 épocas.
+3. Evaluar en `validation` tras cada época. Seleccionar mejora estricta de accuracy global; en empate se conserva el checkpoint anterior. Patiencia: 5.
+4. Restaurar el checkpoint seleccionado. No volver a entrenar sobre train+validation ni actualizar sus estadísticas durante las evaluaciones.
+5. Evaluarlo una vez en `expertise` con transformaciones deterministas. Guardar accuracy y recuentos por clase.
+6. Producir logits del mismo checkpoint sobre el proxy y construir M usando exclusivamente los estadísticos de expertise.
+
+CIFAR-10 usa augmentation solo para entrenamiento local; proxy, validation y expertise usan la vista determinista. MNIST/Fashion-MNIST no tienen augmentation aleatoria. No se evalúa el teacher sobre el test oficial.
+
+La máscara es:
+
+\[
+M_{k,c}=\mathbf 1[n^{E}_{k,c}>0\land Acc^{E}_{k,c}\geq\tau_d].
+\]
+
+`article1/distillation.py::authority_from_expertise` implementa esta regla. M=0 significa **competencia no acreditada**, no incompetencia demostrada. Los recuentos distinguen ausencia de observaciones y precisión insuficiente. No se añade un mínimo muestral ni un estimador continuo en esta revisión.
+
+El cache contiene `logits[N,K,C]` float32, `labels`, `proxy_idx`, `M`, `expertise_accuracy` y `expertise_counts`. El metadata registra época seleccionada, épocas ejecutadas, accuracy de validación, hashes de checkpoints, procedencia de particiones y `M_source=expertise_accuracy_and_counts_only`. No contiene estadísticas de un test local.
+
+### Qué significa cada evaluación
+
+- Validation selecciona el teacher; su accuracy está condicionada por esa selección.
+- Expertise estima competencia para construir el sistema. **No es un test final**.
+- Las métricas del target sobre proxy describen la señal utilizada para entrenar al student.
+- Accuracy y NLL del student final en el test oficial evalúan el procedimiento completo.
+
+No se usan test ni métricas de student para seleccionar checkpoints, umbrales, temperaturas o soporte. Si en el futuro se selecciona un checkpoint del student, hará falta una validación del servidor separada. Los presupuestos actuales son fijos.
+
+Evaluar M sobre el mismo expertise que la construye no valida independientemente su generalización. Una afirmación específica sobre esa generalización requeriría un cuarto conjunto local separado desde el principio. Reiniciar el procedimiento no convierte en desconocido un test ya consultado: se conserva el historial experimental y no se presenta como una preregistración anterior a esos resultados.
+
+## 5. Targets canónicos
+
+Sean `p_k = softmax(z_k/T)`, `L(w)=softmax(sum_k w_k z_k/T)` y `P(w)=sum_k w_k p_k`. Los pesos suman uno sobre teachers.
+
+| Método | Selección/pesos | Target |
+|---|---|---|
+| `feddf_logit` | Uniformes, todos | L(w) |
+| `expert_logit` | Uniformes entre M[k,y]=1 | L(w) |
+| `oracle_logit` | Uniformes entre argmax(z_k)=y | L(w) |
+| `confidence_logit` | MSP a T=1, seguido de softmax entre teachers | L(w) |
+| `consensus_logit` | Clase argmax de la media de probabilidades a T=1; teachers cuyo argmax coincide | L(w) |
+| `energy_logit` | logsumexp(z_k) a T=1, seguido de softmax entre teachers | L(w) |
+| `expert_prob` | Mismo routing EXPERT | P(w) |
+| `oracle_prob` | Mismo routing ORACLE | P(w) |
+| `expert_prob_sr` | Mismo routing EXPERT | Enmascarar y renormalizar cada p_k por M antes de promediar |
+
+Un conjunto seleccionado vacío usa el mismo fallback **FedDF-logit**, también en brazos prob/SR. Se contabiliza y se comprueba igualdad de targets. Consensus puede quedar vacío aunque haya diez teachers.
+
+FedDF es una adaptación one-shot de su componente de ensemble distillation, no una reproducción del protocolo iterativo completo. Confidence, Consensus y Energy son controles internos. Energy depende de escalas y offsets aditivos de logits; su peso no acredita expertise. ORACLE usa etiquetas y no es un límite superior garantizado del rendimiento del student.
+
+Logits y probabilidades no son operadores equivalentes. En SR, la probabilidad normalizada de la clase verdadera no puede disminuir para un experto seleccionado; mejorar NLL del target es parcialmente consecuencia de la construcción y no prueba que el conocimiento eliminado perjudique KD. No se implementan class-supported ni ORACLE+SR.
+
+## 6. KD, supervisado y tamaños del proxy
+
+`article1/runner.py::_train_proxy` comparte arquitectura, inicialización, orden, transformaciones, optimizador y evaluación entre CE y KD. AdamW, lr=1e-3, weight decay=1e-4, batch solicitado 256, sin scheduler. La receta KD principal es T=8, 30 épocas: con 10.000 ejemplos son 1200 actualizaciones.
+
+KD consume q directamente con `T² KL(q || softmax(student/T))`, sin segundo softmax del target. CE consume etiquetas enteras. El student se evalúa al terminar; su NLL usa logits sin dividir por T.
+
+`article1/proxy.py::proxy_positions` permite curvas de tamaño N: subconjuntos anidados estratificados del proxy ya reservado, sin cambiar teachers ni datos privados. El proxy completo conserva su orden. No confundir `distill/supervised --proxy-size` con `partition --proxy-size`, que cambia la reserva de datos.
+
+Para tamaños reducidos se exige `--updates` explícito en KD. Supervisado usa 1200 por defecto. N<256 reduce el batch efectivo a N; se conserva el batch final incompleto. Presupuesto igualado no significa convergencia óptima ni idéntico número de ejemplos vistos entre tamaños.
+
+Se registran tamaño/hash del proxy maestro y seleccionado, etiquetas, política de selección, receta JSON, inicialización, estado final, updates, ejemplos vistos y épocas. `consumed_batches_sha256` incluye índices realmente consumidos y fronteras de batch. `batch_order_sha256` conserva la huella de permutaciones completas.
+
+La identidad supervisada excluye régimen y teachers: puede reutilizarse entre regímenes si coinciden dataset, seed, datos, inicialización y receta. No contarlo como réplicas independientes. La identidad KD incluye cache, máscara, proxy, método, temperatura y receta. Las filas de protocolos diferentes no se mezclan. Una invocación directa repetida vuelve a entrenar y hace upsert por run_id.
+
+## 7. Organización
+
+| Archivo | Responsabilidad |
+|---|---|
+| `article1/__init__.py` | Versión activa, datasets, regímenes, seeds y umbrales |
+| `article1/partitioning.py` | Reserva pública, reparto entre clientes, estratificación local y manifiesto |
+| `article1/datasets.py`, `models.py` | Datos, transformaciones y arquitecturas: MnistNet o ResNet9 |
+| `article1/local_training.py` | Train → selección en validation → expertise del checkpoint congelado |
+| `article1/distillation.py` | Máscara, routing, targets y pérdida KD |
+| `article1/runner.py`, `proxy.py` | CLI, runtime común CE/KD y selección N |
+| `run_article1_grid.py` | Plan explícito, dry-run y reutilización de ejecuciones compatibles |
+| `article1/audit.py`, `conditions.py`, `rq2.py` | Auditoría de fuentes, tabla de condiciones y control de temperatura |
+| `article1/analysis.py` | Contrastes emparejados y gráficas de resultados |
+| `article1/reproduce.py`, `hashes.py` | Reproducción de una celda y huellas |
+| `notebooks/article1_partition_diagnostics.ipynb` | Heatmaps de reparto real y diagnóstico de soporte |
+| `notebooks/article1_definitive_analysis.ipynb` | Análisis de resultados v3 cuando esté completa la evidencia necesaria |
+| `tests/` | Invariantes NumPy y comprobaciones sintéticas CPU |
+
+`README.md` es la única documentación explicativa. Los notebooks contienen las celdas de análisis y las instrucciones necesarias para interpretarlas, sin duplicar una especificación del método.
+
+## 8. Uso paso a paso
+
+Python 3.11+. Instalar en un entorno virtual:
 
 ```bash
 python -m venv .venv
@@ -180,206 +163,90 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-`requirements.txt` mantiene las versiones de referencia del runtime de entrenamiento (incluido PyTorch). Para trabajar solo con CSV y pruebas rápidas, sin PyTorch:
+Solo análisis/pruebas ligeras: `pip install -r requirements-dev.txt`. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
+
+### A. Crear y revisar solo particiones
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python run_article1_grid.py --stage partition --datasets mnist --seeds 42 --dry-run
+python run_article1_grid.py --stage partition --datasets mnist --seeds 42
+jupyter notebook notebooks/article1_partition_diagnostics.ipynb
 ```
 
-`requirements-analysis.txt` reúne NumPy, pandas y matplotlib. El notebook necesita además Jupyter, incluido en `requirements.txt`; en el entorno ligero se puede instalar `jupyter>=1.1,<2`. La prueba de determinismo del runtime se omite explícitamente si PyTorch/torchvision no están disponibles. No se presenta esa omisión como validación de CUDA.
+Los comandos usan `OUTPUTS/article1_v3/` por defecto. En el notebook elegir dataset, seed y régimen local de interés. Comprueba los seis regímenes, el proxy común, cobertura y huellas. Exporta cuatro figuras en PNG/PDF y dos tablas CSV bajo `figures/partitions/<dataset>-seed<seed>/`:
 
-### Inspeccionar un plan sin entrenar
+1. Recuentos cliente–clase entre regímenes.
+2. Composición por cliente normalizada.
+3. Recuentos de train/validation/expertise del régimen elegido.
+4. Fracciones de cada split respecto al total de su pareja cliente–clase.
+
+Repetir para seeds 43/44 y los otros datasets antes del barrido. Las figuras no infieren expertise del reparto: tener datos de una clase no garantiza competencia. Gris indica ausencia de clase y cero indica ausencia en ese split.
+
+### B. Teacher y KD: ejecutar después de aprobar las particiones
 
 ```bash
-python run_article1_grid.py --dry-run
-python run_article1_grid.py --stage distill --datasets cifar --regimes iid alpha0p1 single --seeds 42 --methods expert_logit expert_prob expert_prob_sr --dry-run
+python -m article1.runner teachers --dataset mnist --seed 42 --regime iid --partitions OUTPUTS/article1_v3/partitions/mnist-seed42-iid --output OUTPUTS/article1_v3/sources/mnist-seed42-iid --device cuda
+python -m article1.runner distill --dataset mnist --seed 42 --method expert_logit --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results.csv --device cuda
 ```
 
-El grid T=8 existente está completo: **no debe repetirse sin una razón metodológica concreta**. Eliminar `--dry-run` ejecuta las etapas pendientes. No hay ninguna automatización de nuevos barridos.
-
-### Una etapa o una celda explícita
+Para planificar más celdas sin ejecutarlas:
 
 ```bash
-python -m article1.runner partition --dataset mnist --regime iid --seed 42 --output OUTPUTS/article1/partitions/mnist-seed42-iid
-python -m article1.runner teachers --dataset mnist --regime iid --seed 42 --partitions OUTPUTS/article1/partitions/mnist-seed42-iid --output OUTPUTS/article1/sources/mnist-seed42-iid --device cuda
-python -m article1.runner distill --dataset mnist --seed 42 --method expert_logit --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1/results.csv --device cuda
+python run_article1_grid.py --stage distill --datasets mnist --regimes iid --seeds 42 --methods feddf_logit expert_logit oracle_logit --dry-run
 ```
 
-Las etapas de partición y teachers ya completadas se conservan. Para un diseño distinto, usar otro `--output-root`; no sobrescribir ni reutilizar por nombre caches incompatibles.
+No ejecutar el grid entero antes del control pequeño. Los outputs de teachers no vacíos se rechazan; un entrenamiento interrumpido se inspecciona antes de decidir cómo repetirlo. No hay sobrescritura automática de checkpoints ni resampling de particiones.
 
-### Supervisado y curva de tamaños del proxy
-
-El comando sobre el proxy completo es:
+### C. Supervisado y un tamaño del proxy
 
 ```bash
-python -m article1.runner supervised \
-  --dataset mnist --seed 42 \
-  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
-  --results OUTPUTS/article1/results_supervised_proxy.csv \
-  --updates 1200 --device cuda
+python -m article1.runner supervised --dataset mnist --seed 42 --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_supervised_proxy.csv --updates 1200 --device cuda
+python -m article1.runner supervised --dataset cifar --seed 42 --cache OUTPUTS/article1_v3/sources/cifar-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_proxy_size.csv --proxy-size 1000 --updates 1200 --device cuda
+python -m article1.runner distill --dataset cifar --seed 42 --cache OUTPUTS/article1_v3/sources/cifar-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_proxy_size.csv --method expert_logit --temperature 8 --proxy-size 1000 --updates 1200 --device cuda
 ```
 
-Sin `--proxy-size` se usan **todas las filas del cache**, no un tamaño supuesto. Para el cache canónico de 10.000 ejemplos, batch 256 y 1200 updates equivalen a las 30 épocas KD históricas, incluyendo el último batch de 16 ejemplos en cada época.
+N=1000 es ejemplo de sintaxis, no una orden para lanzar un barrido. Estos brazos rechazan una salida llamada `results.csv`. KD a temperaturas distintas de 8 debe ir también a un CSV separado; el lanzador lo exige.
 
-Para un punto de la curva, añadir el mismo `--proxy-size N` a ambos brazos. Ejemplo de sintaxis con N=1000 (no constituye una lista de tamaños acordada):
-
-```bash
-python -m article1.runner supervised \
-  --dataset mnist --seed 42 --proxy-size 1000 --updates 1200 \
-  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
-  --results OUTPUTS/article1/results_proxy_size.csv --device cuda
-
-python -m article1.runner distill \
-  --dataset mnist --seed 42 --proxy-size 1000 --updates 1200 \
-  --method expert_logit --temperature 8 \
-  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
-  --results OUTPUTS/article1/results_proxy_size.csv --device cuda
-```
-
-Repetir esas celdas explícitas para los tamaños, seeds y regímenes previamente acordados. No se lanza automáticamente ningún barrido. `--epochs` y `--updates` son excluyentes en la CLI KD; KD con `--proxy-size` exige `--updates`. El modo histórico sin esas opciones conserva su receta e identidad. El modo de presupuesto explícito tiene una identidad distinta aunque coincida numéricamente con 30 épocas: no mezclar ambos como réplicas independientes.
-
-**Selección:** se permutan por seed los índices públicos de cada clase y se intercalan las clases. Los conjuntos son anidados al aumentar N y se devuelven en el orden original del cache. Con proxy maestro balanceado, tamaños múltiplos de 10 mantienen balance exacto; otros tamaños difieren como máximo en una muestra por clase (se priorizan las clases en orden ascendente para el resto). El proxy completo no se reordena. Teachers, máscara y particiones privadas permanecen fijos. Nunca usar la opción homónima de `partition` para este estudio.
-
-**Comparabilidad implementada:** CE y KD comparten función de entrenamiento, arquitectura, secuencia de inicialización, vista determinista sin augmentation, AdamW (lr=1e−3, weight decay=1e−4), batch solicitado (256 por defecto), orden por seed y época, ausencia de scheduler, número exacto de actualizaciones y evaluación final. CE usa etiquetas enteras; KD consume q directamente con T²KL y T=8 por defecto. El test no selecciona checkpoints ni hiperparámetros. Esta es una comparación de presupuesto igualado, no de rendimiento óptimo tras ajuste separado. KD incorpora conocimiento privado mediante los teachers; CE solo usa las etiquetas públicas.
-
-Ambos verifican metadata, SHA256 del cache y correspondencia de etiquetas con el dataset público antes de optimizar. El supervisado no utiliza logits ni máscara como señal de aprendizaje. Su identidad excluye cache y régimen, pero incluye dataset, seed, índices, etiquetas y receta; se puede reutilizar entre regímenes únicamente si coincide todo ello. La procedencia del cache se registra aparte.
-
-**Registro para el notebook:** `proxy_size`, `proxy_master_size`, hashes de índices maestros/seleccionados y etiquetas, política/seed de selección, receta JSON, estado inicial/final, `updates`, `examples_seen`, `epochs_completed` y `epochs_started`. `consumed_batches_sha256` identifica los índices realmente usados, incluyendo fronteras de batch. Se conserva `batch_order_sha256` para comparar con el histórico: representa permutaciones completas y, cuando hay una época parcial, no sustituye la huella de consumo. Las filas históricas carecen de esta nueva huella; comparar también tamaño, presupuesto y receta.
-
-Al emparejar CE con KD en el notebook, usar dataset, seed, tamaño, hashes de proxy/etiquetas, inicialización, presupuesto y receta; asociar el mismo CE a los regímenes compatibles. Exigir igualdad de `consumed_batches_sha256` cuando exista en ambos. No emparejar por `run_id` ni contar el CE reutilizado como nuevas réplicas. Comprobar explícitamente los hashes, no inferir igualdad solo por N.
-
-Con N<256, el batch efectivo es N; se conserva el último batch incompleto. Presupuesto fijo no iguala épocas ni ejemplos consumidos entre tamaños: el CSV hace visible esa diferencia. No se mide todavía un punto de cruce ni se ha fijado un umbral de rendimiento «decente».
-
-El supervisado y las ejecuciones KD con tamaño/presupuesto explícito rechazan una salida llamada `results.csv`, para proteger el grid histórico. El CSV separado hace upsert por identidad; repetir exactamente una celda vuelve a entrenarla y sustituye su fila, no crea otra réplica.
-
-### Temperatura: salida separada
-
-Ejemplo de planificación del diseño existente, no de un nuevo barrido:
+### D. Comprobar código y resultados
 
 ```bash
-python run_article1_grid.py --stage distill --datasets cifar --regimes iid alpha0p1 single --seeds 42 43 44 --methods expert_logit expert_prob --temperatures 1 4 --results OUTPUTS/article1/results_rq2_temperature.csv --reuse-results OUTPUTS/article1/results.csv --dry-run
-```
-
-No se permite T≠8 hacia el CSV principal mediante el lanzador. La CLI de una sola celda permite una ruta explícita: quien la invoque debe respetar la misma separación.
-
-### Tablas, análisis y niveles de validación
-
-Para reconstruir `conditions.csv` se necesitan tanto caches como particiones:
-
-```bash
-python -m article1.conditions --source-root OUTPUTS/article1/sources --partition-root OUTPUTS/article1/partitions
-```
-
-Para analizar, colocar `results.csv` y `conditions.csv` en sus rutas canónicas y ejecutar el notebook desde Jupyter. Si está disponible `results_rq2_temperature.csv`, se incorpora y se exige que la comparación focal tenga 54 ejecuciones; si falta, se indica explícitamente y el análisis T=8 sigue disponible.
-
-El notebook valida siempre cobertura, duplicados, métricas, presupuesto y coincidencia de hashes/routing **registrados en CSV**. Esto no verifica los archivos fuente ausentes. Su variable `VERIFY_CACHES=False` se imprime como validación CSV únicamente. Con `VERIFY_CACHES=True`, requiere los caches y añade las auditorías; cualquier error detiene el análisis.
-
-Se exportan CSV derivados y figuras PNG/PDF. No se sobrescriben los resultados experimentales. Git conserva el notebook sin outputs voluminosos; sus tablas y figuras se regeneran. Los captions comunes son: líneas finas/puntos = seeds; marcadores/barras = media ± SD; diferencias = efecto emparejado en pp; eje = categorías ordenadas, sin distancias cuantitativas implícitas. Los rangos pequeños no constituyen una prueba de equivalencia.
-
-Auditorías explícitas:
-
-```bash
-python -m article1.audit OUTPUTS/article1/results.csv --source-root OUTPUTS/article1/sources
-python -m article1.rq2 --results OUTPUTS/article1/results.csv OUTPUTS/article1/results_rq2_temperature.csv --source-root OUTPUTS/article1/sources --temperatures 1 4 8 --isolated-results OUTPUTS/article1/results_rq2_temperature.csv
 python -m compileall -q article1 run_article1_grid.py
 python -m pytest -q
+python -m article1.conditions
+python -m article1.audit OUTPUTS/article1_v3/results.csv
+jupyter notebook notebooks/article1_definitive_analysis.ipynb
 ```
 
-`audit` reconstruye targets para comprobar normalización, routing, fallback y repetibilidad, y comprueba procedencia/máscara de las fuentes. El verificador RQ2 contrasta además las métricas registradas con los targets reconstruidos de sus celdas focales. Ninguno verifica por sí solo que un estudiante histórico sea reproducible sin su ejecución y artefactos.
+Conditions exige las 54 fuentes. El notebook definitivo exige el grid de 486 filas T=8: no se presenta como ejecutable con resultados v3 aún ausentes. Para verificación completa de caches activar `VERIFY_CACHES`; comprobar CSV y huellas registradas no sustituye reconstruir los targets con las fuentes reales.
 
-La comprobación de reproducción **entrena dos veces** una condición y escribe fuera del CSV principal:
+## 9. Estado histórico y reinicio
 
-```bash
-python -m article1.reproduce --dataset cifar --seed 42 --method expert_logit --cache OUTPUTS/article1/sources/cifar-seed42-alpha0p1/teacher_cache.npz --results OUTPUTS/article1/reproducibility_check.csv --device cuda
-```
+La versión anterior a este cambio es el commit `653a145ba4cc2367820d1be5bdf05e1029d83ef3` (protocolo v2, train/holdout/test local, 65/20/15). Su código sigue disponible en Git. Sus artefactos permanecen en `OUTPUTS/article1/`, sin migración ni borrado.
 
-No ejecutar este comando como una prueba rápida de limpieza. `reproduce` rechaza un destino llamado `results.csv` y guarda el informe JSON junto a su salida.
+Evidencia histórica disponible: 486 ejecuciones T=8 (54 condiciones × 9 métodos), experimento focal de temperatura y análisis de soporte. Mostraban ventaja creciente de EXPERT con especialización, cercanía descriptiva a ORACLE, dependencia de temperatura del contraste logits/probabilidades y casos donde mejorar NLL del target con SR empeoraba al student. Estas observaciones no se convierten en resultados v3 por cambiar nombres de archivos.
 
-## 9. Estado científico verificado a 2026-09-07
+El nuevo reparto exige nuevos teachers, máscaras y KD. El proxy y la asignación entre clientes se mantienen algorítmicamente; los supervisados históricos pueden ser numéricamente reutilizables si se verifica la identidad completa, pero no se importan ni reetiquetan automáticamente como v3. Los caches v2 son rechazados por el runtime activo.
 
-La base de código inspeccionada antes de esta limpieza fue `baa0e2d`. Las cifras siguientes se recalcularon desde los CSV facilitados por el investigador; no son nuevas ejecuciones ni implican que esos CSV estén versionados en Git.
+Los caches históricos con commit desconocido conservan `legacy_unverified`. El control MNIST-IID de identidad de targets y pequeñas diferencias del student sigue pendiente de aclaración sobre las fuentes históricas; no justifica mezclar ambos protocolos.
 
-| Evidencia | Estado y lectura defendible |
-|---|---|
-| Grid principal | 486 filas T=8; 54 condiciones; nueve métodos; sin huecos ni duplicados en ese grid |
-| EXPERT−FedDF | Ventaja creciente en las trayectorias medias de los tres datasets; 8/9 trayectorias por seed no decrecientes en los seis regímenes |
-| Excepción a monotonía | CIFAR-10, seed 42: +40,67 → +37,49 pp entre α=0.1 y Multi |
-| ORACLE−EXPERT | Media +0,2498 pp, MAE 0,5735 pp; cercanía descriptiva, no equivalencia |
-| EXPERT-prob−EXPERT-logit, T=8 | Media +0,0870 pp, MAE 0,2778 pp; 50/54 pares dentro de ±1 pp |
-| Temperatura focal | CIFAR-10, IID/α=0.1/Single, tres seeds, dos métodos, T=1/4/8: 54 ejecuciones completas |
-| Ejemplo de dependencia de T | CIFAR-10 α=0.1: prob−logit = −3,92 ± 0,34 pp a T=1; +0,57 ± 0,35 a T=8 |
-| Soporte restringido, T=8 | NLL del target mejora en 51/54 pares; accuracy del estudiante baja en 34/54; ambas cosas suceden en 32/54 |
-| SR por condición | En CIFAR-10, pérdidas de 4,86–6,83 pp de media en IID/Dirichlet; Single gana 1,43 ± 0,80 pp de accuracy pero empeora NLL |
-| Supervisado y tamaño del proxy | Runtime CE/KD y selección N implementados; ejecuciones y curva pendientes |
+## 10. SIGUIENTES PASOS
 
-El CSV principal adjunto contiene 504 filas: 486 a T=8 y 18 a temperaturas inferiores, conservadas históricamente. El CSV aislado aporta 27 filas adicionales. El análisis filtra T=8 y combina las filas pertinentes para temperatura sin duplicarlas; esta limpieza no mueve ni reescribe filas originales. Nueve pares prob/SR a T inferior tienen cobertura incompleta y no se mezclan con RQ2-B a T=8.
+- [ ] Crear particiones v3 de los tres datasets/seeds y revisar heatmaps, recuentos escasos y ausencia de conjuntos vacíos. No usar resultados del test para modificar este reparto.
+- [ ] Validar una condición pequeña: entrenamiento local, selección en validation, M desde expertise, targets y repetición exacta KD. CUDA debe comprobarse en el entorno experimental.
+- [ ] Autorizar y ejecutar después el grid v3, manteniendo common random numbers y registro de procedencia. No reutilizar KD histórica como evidencia del nuevo reparto.
+- [ ] Cerrar los tres contrastes y sus captions con puntos emparejados por seed, media y SD. Clients no son réplicas independientes; no inferir causalidad de correlaciones agregadas.
+- [ ] Ejecutar el supervisado sobre el proxy completo cuando existan caches v3; acordar el lanzamiento de la curva focal. Propuesta previa: N=100/500/1000/5000/10000, CIFAR, IID/α=0.1/single, seeds 42/43/44, EXPERT-logit. Las cuentas de ejecuciones previas suponían reutilizar KD v2 y deben recalcularse para v3.
+- [ ] Añadir al notebook las curvas KD−supervisado y cualquier intervalo de cruce observado. No se conoce un tamaño suficiente ni un cruce; «rendimiento decente» necesita un criterio previo explícito.
+- [ ] Revisar posicionamiento bibliográfico y comparadores compatibles antes de añadir métodos.
+- [ ] Redactar el artículo desde las figuras: observación, interpretación compatible, claim defendible y limitación. Evitar equivalencia EXPERT/ORACLE, superioridad universal de logits o atribuir causalmente a dark knowledge cualquier pérdida con SR.
+- [ ] Reservar para estudios posteriores estimación de máscaras, proxy sin etiquetas y personalización con class_mask.
 
-### Límites y controles pendientes
+La separación de expertise evita su reutilización para seleccionar el checkpoint. No elimina la incertidumbre con pocos ejemplos, la dependencia de umbrales, el coste informacional de M+y ni el conocimiento previo de resultados del benchmark.
 
-- Las 486 filas T=8 recibidas carecen de `student_final_sha256`; las 54 condiciones declaran `legacy_unverified`. La coincidencia de hashes registrados no demuestra retrospectivamente determinismo ni procedencia completa.
-- En MNIST-IID la máscara es completa, pero SR−full da −0,03, +0,07 y −0,02 pp. Debe esclarecerse con los caches y la procedencia antes de interpretar diferencias pequeñas como efectos del método.
-- La normalización SR garantiza matemáticamente que q_y no disminuya cuando los seleccionados tienen M[k,y]=1. Mejorar la NLL del target no prueba que se haya eliminado conocimiento perjudicial. La accuracy del target tampoco es una garantía de utilidad KD.
-- El daño por pérdida de estructura interclase es una interpretación compatible, todavía no una causa identificada. La reducción de entropía por sí sola no explica el signo de los cambios del estudiante.
-- El código determina qué hace la versión actual. Una comprobación sintética o una reproducción de una celda no valida automáticamente todas las ejecuciones históricas.
+## 11. Validación de esta revisión
 
-## 10. Comparadores y literatura
-
-`feddf_logit` es la adaptación one-shot del paso de ensemble distillation de FedDF, no una reproducción del protocolo federado iterativo completo. Confidence, Consensus y Energy son **controles internos**, no reproducciones externas SOTA.
-
-Punto de partida bibliográfico: [FedDF, Ensemble Distillation for Robust Model Fusion in Federated Learning](https://arxiv.org/abs/2006.07242). La revisión focal de comparadores sigue siendo un siguiente paso: comprobar fuentes primarias y sus ecuaciones, información disponible, logits/probabilidades, etiquetas, rondas y coste. El objetivo es una selección defendible; no cumplir una cuota de métodos.
-
-Selective-FD se dejó fuera de la comparación principal por diferencias de protocolo e información requerida en el análisis previo. Una eventual reconsideración debe justificarse con la fuente original. Los métodos generativos/data-free, class-supported y los híbridos no se incorporan automáticamente. No se afirma que el benchmark actual sea exhaustivo del SOTA.
-
-## 11. SIGUIENTES PASOS
-
-### A. Cerrar la evidencia base sin rehacer el grid
-
-- [ ] Aclarar el control MNIST-IID con los caches y metadatos de seeds 42/43/44 y el informe de reproducción disponible. Primero comparar targets y procedencia; solo después decidir si hace falta una repetición mínima.
-- [ ] Ejecutar la auditoría completa con las fuentes reales y registrar qué parte de la evidencia es verificable.
-- [ ] Revisar las tablas/figuras regeneradas de los tres contrastes y fijar captions, claims y limitaciones con el investigador.
-- [ ] Documentar cobertura/calidad de la máscara con los umbrales previos. No optimizarlos sobre el test ni perseguir fallback cero.
-- [ ] Completar la revisión focal de comparadores antes de implementar nuevos métodos.
-
-### B. Supervisado frente a destilación según tamaño del proxy
-
-**Pregunta añadida al Artículo 1:** ¿cuánto conocimiento adicional aprovecha KD frente a entrenar el mismo modelo únicamente con las etiquetas de esos N ejemplos públicos? ¿A partir de qué N el supervisado alcanza un criterio de rendimiento útil, y dónde cambia el signo de KD−supervisado?
-
-El código implementa presupuesto emparejado explícito de 1200 updates por defecto; aún hay que acordar la lista de tamaños N y cualquier criterio de «rendimiento decente». No se inventan cruces a partir de los resultados T=8 actuales.
-
-- [ ] Definir antes de ejecutar qué significa «decente»: un criterio de aplicación o referencia explícita, no un corte retrospectivo que favorezca KD. Si se seleccionan hiperparámetros o parada, usar validación separada; nunca test.
-- [ ] Seleccionar una lista pequeña de tamaños N y subconjuntos anidados y reproducibles del **proxy ya reservado**, compartidos entre supervisado y KD.
-- [x] Mantener particiones privadas, teachers, máscara e índices maestros fijos al variar N. **No usar `--proxy-size` de la partición para este estudio:** cambiaría también los datos disponibles para los clientes. El soporte N selecciona filas del cache existente.
-- [x] Implementar un baseline supervisado desde la misma inicialización, arquitectura y muestras proxy, usando cross-entropy con sus etiquetas reales. KD usa los mismos N ejemplos y, además, el conocimiento de los teachers y la máscara.
-- [ ] Acordar un presupuesto comparable antes de medir: fijar épocas no fija actualizaciones al variar N. Una referencia con updates emparejados responde a un contraste distinto de entrenar cada método hasta convergencia con validación. Decidir el principal y evitar un barrido de ambas cosas sin necesidad.
-- [x] Incorporar N, índices seleccionados, tipo de entrenamiento y receta a la identidad de las nuevas ejecuciones. Usar un CSV separado, por ejemplo `results_proxy_size.csv`; no mezclarlo con el grid histórico.
-- [ ] Reutilizar el supervisado entre regímenes cuando dataset, seed, N, índices, inicialización y receta sean realmente idénticos. El supervisado no depende por sí mismo de cómo se repartieron los datos privados entre clientes; no repetirlo seis veces ni contarlo como seis réplicas independientes.
-- [ ] Evaluar accuracy y NLL, diferencias emparejadas por N y seeds, y el intervalo entre tamaños ensayados en el que cambia el signo. Puede no haber cruce, haber varios o diferir por dataset/régimen; no asumir un umbral universal ni interpolar como si estuviera observado.
-
-El brazo supervisado y la selección N para ambos métodos están implementados. Pendientes: acordar los tamaños y celdas, ejecutar en el entorno experimental y añadir al notebook las curvas emparejadas. No se han ejecutado nuevas pruebas científicas ni vuelto a entrenar teachers.
-
-### C. Trabajos posteriores: fuera de la versión base
-
-- Inferir exposición o competencia desde el modelo recibido; distinguir ambos objetivos y evaluar implicaciones de privacidad.
-- Routing fiable con proxy sin etiquetas o con pocas etiquetas; posibles pseudoetiquetas, OOD o estimadores de fiabilidad por muestra.
-- Estimadores de competencia continuos/incertidumbre si aportan una pregunta independiente frente a la máscara binaria.
-- Segunda destilación y personalización con `class_mask`, distinta de restringir el ensemble de este artículo.
-
-La asignación exacta de estas líneas a artículos posteriores no está fijada. No se importan resultados KD_v4 como evidencia canónica sin reproducción compatible.
-
-## 12. Pautas de mantenimiento y cambios de esta limpieza
-
-Pregunta científica → evidencia existente → decisión → implementación → verificación. Cada variante necesita una hipótesis independiente. Los cambios importantes de método, presupuesto y alcance se validan con el investigador antes de ejecutar. Se priorizan código legible, funciones pequeñas y pruebas de invariantes sobre frameworks y migraciones permanentes.
-
-Esta limpieza:
-
-- Retira `article1/backfill.py`, una migración de métricas ya realizada, y su prueba específica. Su versión histórica sigue en Git.
-- Elimina del lanzador el modo especial `--rq2-temperature-sweep` y el permiso `--allow-nondefault-main-results`. Se utiliza el comando explícito de temperatura anterior y la reutilización general por identidad. Se mantiene el verificador `article1.rq2` porque sigue siendo útil para auditar evidencia existente.
-- Centraliza el análisis compartido en `article1.analysis` y rehace el notebook sin definiciones duplicadas ni documentación científica paralela. Integra el contraste de soporte ya analizado y exporta PNG/PDF.
-- Mantiene las fórmulas, modelos, particiones, umbrales y receta numérica. La configuración KD usada para identidad y ejecución tiene una sola definición.
-- Separa dependencias ligeras de análisis/pruebas y entrenamiento; elimina la dependencia no utilizada de seaborn.
-- Hace explícitas las rutas locales de particiones al generar condiciones; no calcula una huella aparentemente válida de un directorio inexistente.
-- Corrige el destino por defecto de reproducción para proteger el CSV principal.
-
-Validación de esta revisión: **20 pruebas correctas y una omitida** (determinismo del runtime, por ausencia de PyTorch), compilación correcta y **27 comparaciones de targets antes/después exactamente iguales** (nueve métodos × T=1,4,8 con entradas sintéticas). Las seis celdas de código del notebook se ejecutaron en proceso con los CSV facilitados, generando 13 tablas y cinco figuras en PNG/PDF sin modificar los CSV fuente. El entorno impidió arrancar un kernel Jupyter por restricciones de sockets; la verificación se hizo ejecutando las celdas secuencialmente. La ejecución de entrenamiento/CUDA y la auditoría con caches reales no se sustituyen por estas comprobaciones. No se ejecutó nueva KD.
-
-Validación de la extensión supervisada/proxy (2026-09-08): 30 pruebas correctas con PyTorch/torchvision CPU, incluidas pruebas sintéticas de emparejamiento CE/KD, épocas parciales, integridad del cache, selección anidada y repetibilidad. Tres comparaciones sintéticas adicionales contra el runner previo conservaron exactamente todos los campos históricos, incluido el hash final del student y el run_id (FedDF-logit, EXPERT-prob y EXPERT-prob-SR). No valida ejecución CUDA ni sustituye una comprobación con los caches reales.
+- 40 pruebas correctas con PyTorch/torchvision CPU; compilación y comprobaciones de estilo de los archivos modificados correctas.
+- Una prueba sintética modifica solo las predicciones observadas en expertise: cambia M, pero conserva exactamente checkpoints seleccionados, registros de selección y logits del proxy. No es un resultado científico de los datasets.
+- Se generaron y validaron particiones reales de MNIST, seed 42, en los seis regímenes. Frente al código anterior, coinciden exactamente el proxy y la asignación privada a cada cliente; cambia solo la división local.
+- Las seis celdas de código del notebook de particiones se ejecutaron secuencialmente en proceso, generando cuatro figuras PNG/PDF y dos tablas. El entorno impidió iniciar el kernel Jupyter por restricciones de sockets; queda comprobar esa vía de ejecución en el entorno del investigador.
+- No se entrenaron teachers ni students sobre datasets reales. No se ha validado CUDA ni completado una cuadrícula científica v3.

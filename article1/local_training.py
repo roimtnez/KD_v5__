@@ -1,4 +1,4 @@
-"""Train local teachers once, select by holdout, then cache proxy logits."""
+"""Train local teachers once, select by validation, estimate expertise independently, then cache proxy logits."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from article1 import PROTOCOL_VERSION, THRESHOLDS
-from article1.datasets import datasets_for
-from article1.distillation import authority_from_holdout
+from article1.datasets import datasets_for, labels_of
+from article1.distillation import authority_from_expertise
 from article1.hashes import file_sha256, git_commit
 from article1.models import build_model
-from article1.partitioning import validate_splits
+from article1.partitioning import load_partitions
 
 
 def configure_determinism() -> None:
@@ -93,35 +93,32 @@ def train_and_cache(
 ) -> Path:
     """Create one selected checkpoint per teacher plus the shared proxy cache.
 
-    The proxy labels are read only after training; they are allowed for target
-    routing but never for checkpoint selection or M estimation.
+    Proxy labels are allowed for server routing, never for checkpoint selection
+    or M estimation. Validation selects the checkpoint; expertise is evaluated
+    only after the model is frozen. Full training labels validate partition identity.
     """
     dev = torch.device(device)
     train_ds, eval_ds, _ = datasets_for(dataset, data_dir)
-    proxy_file = Path(partition_dir) / "proxy.npz"
-    with np.load(proxy_file, allow_pickle=False) as data:
-        proxy_idx = data["proxy_idx"].astype(np.int64)
-    client_files = sorted(Path(partition_dir).glob("client_*.npz"))
-    clients = []
-    for path in client_files:
-        with np.load(path, allow_pickle=False) as data:
-            clients.append(
-                {
-                    key: data[key].astype(np.int64)
-                    for key in ("train_idx", "holdout_idx", "test_idx")
-                }
-            )
-    if len(clients) != 10:
-        raise ValueError("Article 1 fixes K=10")
-    validate_splits(proxy_idx, clients)
+    if epochs <= 0 or patience <= 0 or batch_size <= 0:
+        raise ValueError("training budgets must be positive")
+    proxy_idx, clients, partition_metadata = load_partitions(
+        partition_dir, np.asarray(labels_of(eval_ds), dtype=np.int64)
+    )
+    if (
+        partition_metadata.get("dataset"),
+        partition_metadata.get("regime"),
+        partition_metadata.get("seed"),
+    ) != (dataset, regime, seed):
+        raise ValueError("partition identity does not match teacher condition")
     output_dir = Path(output_dir)
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(f"teacher output is not empty: {output_dir}")
     checkpoints = output_dir / "teachers"
-    checkpoints.mkdir(parents=True, exist_ok=True)
+    checkpoints.mkdir(parents=True)
     all_logits: list[np.ndarray] = []
-    hold_acc = []
-    hold_counts = []
-    test_acc = []
-    test_counts = []
+    expertise_acc = []
+    expertise_counts = []
+    selection_records = []
     hashes = []
     proxy_loader = _loader(eval_ds, proxy_idx, 256, False)
     proxy_labels: np.ndarray | None = None
@@ -132,22 +129,22 @@ def train_and_cache(
         best_state = None
         best_accuracy = -1.0
         remaining = patience
-        train_loader, hold_loader = (
+        train_loader, validation_loader = (
             _loader(train_ds, split["train_idx"], batch_size, True),
-            _loader(eval_ds, split["holdout_idx"], 256, False),
+            _loader(eval_ds, split["validation_idx"], 256, False),
         )
-        for _ in range(epochs):
+        best_epoch = 0
+        for epoch in range(epochs):
             model.train()
             for x, y in train_loader:
                 loss = F.cross_entropy(model(x.to(dev)), y.to(dev))
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
-            h_logits, h_labels = logits_for(model, hold_loader, dev)
-            accuracy = (
-                float((h_logits.argmax(1) == h_labels).mean()) if len(h_labels) else 0.0
-            )
+            v_logits, v_labels = logits_for(model, validation_loader, dev)
+            accuracy = float((v_logits.argmax(1) == v_labels).mean())
             if accuracy > best_accuracy:
+                best_epoch = epoch + 1
                 best_accuracy, best_state, remaining = (
                     accuracy,
                     copy.deepcopy(model.state_dict()),
@@ -158,31 +155,45 @@ def train_and_cache(
                 if remaining <= 0:
                     break
         if best_state is None:
-            raise RuntimeError("teacher has no selectable holdout checkpoint")
+            raise RuntimeError("teacher has no selectable validation checkpoint")
         model.load_state_dict(best_state)
         state_hash = _hash_state(best_state)
         path = checkpoints / f"teacher_{cid:03d}.pt"
-        torch.save({"state_dict": best_state, "state_sha256": state_hash}, path)
+        torch.save(
+            {
+                "state_dict": best_state,
+                "state_sha256": state_hash,
+                "selected_epoch": best_epoch,
+                "validation_accuracy": best_accuracy,
+                "protocol_version": PROTOCOL_VERSION,
+            },
+            path,
+        )
         hashes.append(state_hash)
-        h_logits, h_labels = logits_for(model, hold_loader, dev)
-        t_logits, t_labels = logits_for(
-            model, _loader(eval_ds, split["test_idx"], 256, False), dev
+        # No optimizer steps after selection. This split never selects the checkpoint.
+        e_logits, e_labels = logits_for(
+            model, _loader(eval_ds, split["expertise_idx"], 256, False), dev
+        )
+        selection_records.append(
+            {
+                "client": cid,
+                "selected_epoch": best_epoch,
+                "epochs_run": epoch + 1,
+                "validation_accuracy": best_accuracy,
+            }
         )
         p_logits, p_labels = logits_for(model, proxy_loader, dev)
         if proxy_labels is None:
             proxy_labels = p_labels
         elif not np.array_equal(proxy_labels, p_labels):
             raise AssertionError("proxy labels changed between teachers")
-        h_a, h_c = _per_class(h_logits, h_labels, 10)
-        t_a, t_c = _per_class(t_logits, t_labels, 10)
+        e_a, e_c = _per_class(e_logits, e_labels, 10)
         all_logits.append(p_logits)
-        hold_acc.append(h_a)
-        hold_counts.append(h_c)
-        test_acc.append(t_a)
-        test_counts.append(t_c)
+        expertise_acc.append(e_a)
+        expertise_counts.append(e_c)
     assert proxy_labels is not None
-    mask = authority_from_holdout(
-        np.asarray(hold_acc), np.asarray(hold_counts), THRESHOLDS[dataset]
+    mask = authority_from_expertise(
+        np.asarray(expertise_acc), np.asarray(expertise_counts), THRESHOLDS[dataset]
     )
     cache = output_dir / "teacher_cache.npz"
     np.savez_compressed(
@@ -191,10 +202,8 @@ def train_and_cache(
         labels=proxy_labels,
         logits=np.stack(all_logits, axis=1).astype(np.float32),
         M=mask,
-        holdout_accuracy=np.asarray(hold_acc),
-        holdout_counts=np.asarray(hold_counts),
-        test_accuracy=np.asarray(test_acc),
-        test_counts=np.asarray(test_counts),
+        expertise_accuracy=np.asarray(expertise_acc),
+        expertise_counts=np.asarray(expertise_counts),
     )
     source_hash = file_sha256(cache)
     (output_dir / "metadata.json").write_text(
@@ -207,8 +216,15 @@ def train_and_cache(
                 "regime": regime,
                 "K": 10,
                 "threshold": THRESHOLDS[dataset],
-                "M_source": "holdout_accuracy_and_counts_only",
-                "proxy_source": str(proxy_file),
+                "M_source": "expertise_accuracy_and_counts_only",
+                "checkpoint_selection": "validation_accuracy_strict_improvement",
+                "selection_records": selection_records,
+                "partition_metadata_sha256": file_sha256(
+                    Path(partition_dir) / "metadata.json"
+                ),
+                "split_rule": partition_metadata["split_rule"],
+                "split_fractions": partition_metadata["split_fractions"],
+                "proxy_source": str(Path(partition_dir) / "proxy.npz"),
                 "cache_sha256": source_hash,
                 "cache_creation_commit": git_commit(),
                 "teacher_state_sha256": hashes,

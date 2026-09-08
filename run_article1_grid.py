@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Explicit partition/teacher/KD stages; reuse only identical cached KD recipes."""
 
 from __future__ import annotations
@@ -12,9 +11,10 @@ from pathlib import Path
 
 import numpy as np
 
-from article1 import DATASETS, REGIMES, SEEDS
+from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
 from article1.distillation import METHODS, kd_config, metadata_identity
 from article1.hashes import array_sha256, file_sha256
+from article1.partitioning import load_partitions
 
 
 def command(*arguments: object) -> list[str]:
@@ -45,20 +45,22 @@ def completed_run_ids(paths: list[Path]) -> set[str]:
 def cache_identity(cache: Path) -> dict:
     """Fingerprint the actual cache, not just its dataset/regime filename."""
     metadata = json.loads(cache.with_name("metadata.json").read_text())
+    if metadata.get("protocol") != PROTOCOL_VERSION:
+        raise ValueError(f"incompatible teacher cache: {cache}")
     digest = file_sha256(cache)
     if metadata.get("cache_sha256") != digest:
         raise ValueError(f"cache hash differs from metadata: {cache}")
     with np.load(cache, allow_pickle=False) as data:
-        return dict(
-            source_hash=digest,
-            proxy_hash=array_sha256(data["proxy_idx"]),
-            mask_hash=array_sha256(data["M"]),
-        )
+        return {
+            "source_hash": digest,
+            "proxy_hash": array_sha256(data["proxy_idx"]),
+            "mask_hash": array_sha256(data["M"]),
+        }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1"))
+    parser.add_argument("--output-root", type=Path, default=Path("OUTPUTS/article1_v3"))
     parser.add_argument(
         "--results",
         type=Path,
@@ -114,6 +116,18 @@ def main() -> None:
                 partitions = args.output_root / "partitions" / key
                 source = args.output_root / "sources" / key
                 cache = source / "teacher_cache.npz"
+                if (partitions / "metadata.json").is_file():
+                    proxy, _, meta = load_partitions(partitions)
+                    if (meta.get("dataset"), meta.get("seed"), meta.get("regime")) != (
+                        dataset,
+                        seed,
+                        regime,
+                    ) or len(proxy) != args.proxy_size:
+                        raise ValueError(
+                            f"partition identity/size mismatch: {partitions}"
+                        )
+                if cache.is_file():
+                    cache_identity(cache)
                 if (
                     args.stage in {"all", "partition"}
                     and not (partitions / "metadata.json").is_file()

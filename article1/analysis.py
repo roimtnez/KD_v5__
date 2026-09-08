@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
+from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS, THRESHOLDS
 from article1.distillation import METHODS
 
 KEY = ["dataset", "regime", "seed"]
@@ -101,6 +101,15 @@ def load_results(out: Path) -> dict:
     out = Path(out)
     main = pd.read_csv(out / "results.csv")
     conditions = pd.read_csv(out / "conditions.csv")
+    require(
+        "protocol_version" in main and main.protocol_version.eq(PROTOCOL_VERSION).all(),
+        "Results must belong exclusively to article1-v3; historical v2 remains separate",
+    )
+    require(
+        "protocol_version" in conditions
+        and conditions.protocol_version.eq(PROTOCOL_VERSION).all(),
+        "Conditions must belong exclusively to article1-v3",
+    )
     required = set(IDENTITY + CRN + METRICS + ROUTING + ["run_id", SUPPORT_MASS])
     require(
         required <= set(main), f"Missing result columns: {sorted(required - set(main))}"

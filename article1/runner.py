@@ -86,6 +86,10 @@ def _update_table(path: Path, row: dict) -> None:
         if path.exists():
             with path.open(newline="", encoding="utf-8") as source:
                 existing = list(csv.DictReader(source))
+        if any(old.get("protocol_version") != PROTOCOL_VERSION for old in existing):
+            raise ValueError(
+                "results CSV belongs to another/unknown protocol; use OUTPUTS/article1_v3"
+            )
         key = row["run_id"]
         existing = [old for old in existing if old.get("run_id") != key] + [row]
         fields = sorted(set().union(*(record.keys() for record in existing)))
@@ -440,6 +444,7 @@ def main() -> None:
             args.output,
             proxy_idx=proxy,
             clients=clients,
+            labels=np.asarray(labels_of(eval_ds), dtype=np.int64),
             metadata={
                 "dataset": args.dataset,
                 "regime": args.regime,

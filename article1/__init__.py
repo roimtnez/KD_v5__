@@ -10,7 +10,7 @@ import os
 # precedes imports of runner/local_training, so all Article-1 CLIs see it.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
-PROTOCOL_VERSION = "article1-v2"
+PROTOCOL_VERSION = "article1-v3"
 DATASETS = ("mnist", "fmnist", "cifar")
 REGIMES = ("iid", "alpha1p0", "alpha0p5", "alpha0p1", "multi", "single")
 SEEDS = (42, 43, 44)

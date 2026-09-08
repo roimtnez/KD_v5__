@@ -82,7 +82,7 @@ def runtime(tmp_path, monkeypatch):
         M=np.ones((2, 2), dtype=np.uint8),
     )
     metadata = {
-        "protocol": "article1-v2",
+        "protocol": "article1-v3",
         "dataset": "mnist",
         "seed": 42,
         "regime": "iid",

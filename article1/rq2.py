@@ -6,8 +6,8 @@ import argparse
 import csv
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
@@ -60,7 +60,7 @@ def _key(row: dict) -> tuple[str, str, int, str, float]:
     )
 
 
-def _empty_or_equal(value: str | None, expected: float | int | None) -> bool:
+def _empty_or_equal(value: str | None, expected: float | None) -> bool:
     if expected is None:
         return value in (None, "", "nan", "NaN")
     try:
@@ -126,7 +126,7 @@ def validate_cells(
                 )
             cache_data[condition][1]["cache_sha256"] = file_sha256(cache_path)
         metadata, cache = cache_data[condition]
-        if metadata.get("protocol") != "article1-v2":
+        if metadata.get("protocol") != "article1-v3":
             errors.append("source_protocol")
         if row.get("cache_sha256") != cache["cache_sha256"]:
             errors.append("cache_sha256")
@@ -235,7 +235,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, nargs="+", required=True)
     parser.add_argument(
-        "--source-root", type=Path, default=Path("OUTPUTS/article1/sources")
+        "--source-root", type=Path, default=Path("OUTPUTS/article1_v3/sources")
     )
     parser.add_argument("--temperatures", type=float, nargs="+", default=[1.0, 4.0])
     parser.add_argument(
