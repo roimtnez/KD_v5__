@@ -166,37 +166,66 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 
 Solo análisis/pruebas ligeras: `pip install -r requirements-dev.txt`. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
 
-### Lanzador del flujo completo
+### Ejecución por fases
 
-`run_article1_pipeline.py` debe estar en la raíz del repositorio actualizado. Por defecto **solo muestra el plan**, sin descargar datos ni entrenar:
+`run_article1_pipeline.py` muestra la secuencia sin ejecutar nada. Para ejecutar
+hay que indicar `--phase` y `--execute`. Cada invocación termina en esa fase.
+
+| Fase | Trabajo |
+|---|---|
+| `partitions` | Pruebas, 54 particiones, reconstrucción con etiquetas oficiales y heatmaps |
+| `pilot` | Teachers de MNIST/alpha0p1/42, tres KD logit reutilizables y dos repeticiones técnicas de EXPERT |
+| `teachers` | Verifica el piloto; completa los 540 teachers, máscaras y logits; genera conditions.csv |
+| `rq1` | 324 KD T=8: FedDF, EXPERT, ORACLE, Confidence, Consensus y Energy, todos logit; analiza RQ1 |
+| `aggregation` | 54 EXPERT-prob; compara con EXPERT-logit existente |
+| `temperature` | 36 KD CIFAR IID/alpha0p1/single, T=1/4; compara con T=8 |
+| `support` | 54 EXPERT-prob-SR; compara con EXPERT-prob existente |
+| `supervised` | 9 CE con proxy completo, tres datasets × tres seeds |
+| `proxy-curve` | 12 CE + 36 EXPERT-logit nuevos en CIFAR N=100/500/1000/5000; reutiliza KD N=10000 y completa/reutiliza sus tres CE ancla |
+
+El piloto entrena primero una condición para detectar problemas antes de pagar
+el barrido de teachers. Cada teacher usa train para gradientes, validation para
+seleccionar checkpoint y expertise para construir M después de congelarlo.
+El mismo checkpoint genera los logits del proxy. El test oficial evalúa el
+student final; no selecciona checkpoints, umbrales o temperaturas.
 
 ```bash
 python run_article1_pipeline.py
-python run_article1_pipeline.py --execute --partitions-only
-python run_article1_pipeline.py --execute --device cuda
+python run_article1_pipeline.py --phase partitions --execute
+python run_article1_pipeline.py --phase pilot --execute --device cuda
+python run_article1_pipeline.py --phase teachers --execute --device cuda
+python run_article1_pipeline.py --phase rq1 --execute --device cuda
+# Revisar cada bloque antes de continuar:
+python run_article1_pipeline.py --phase aggregation --execute --device cuda
+python run_article1_pipeline.py --phase temperature --execute --device cuda
+python run_article1_pipeline.py --phase support --execute --device cuda
+python run_article1_pipeline.py --phase supervised --execute --device cuda
+python run_article1_pipeline.py --phase proxy-curve --execute --device cuda
 ```
 
-El flujo completo realiza, en orden:
+Sin `--execute`, una fase solo imprime su plan. `--skip-notebooks` permite
+analizar manualmente; de lo contrario se requiere un kernel Python 3 funcional.
+La interfaz del pipeline es `--phase`; `--stage` pertenece al grid de bajo nivel.
+Las opciones anteriores `--partitions-only` y `--with-proxy-curve` se sustituyen
+por las fases explícitas correspondientes.
 
-1. Compilación y pruebas rápidas; creación/reutilización de las 54 particiones.
-2. Lectura de etiquetas oficiales de train y reconstrucción exacta de cada partición para verificar los índices guardados, además de manifiestos, cobertura, disjunción y proxy balanceado. Guarda `partition_check.json`. Un error detiene el flujo antes del entrenamiento.
-3. Notebook de particiones para los nueve pares dataset/seed: resultados en `OUTPUTS/article1_v3/notebooks/` y figuras en las rutas del notebook.
-4. Piloto MNIST/IID/42: teachers y tres métodos principales; dos ejecuciones adicionales para comprobar reproducción exacta de EXPERT-logit.
-5. Teachers restantes y grid principal: 54 condiciones de teachers (540 modelos locales) y 486 resultados KD T=8 en total, incluyendo el piloto. Generación de conditions y auditoría.
-6. Temperatura focal CIFAR/IID–α=0.1–single: 36 celdas T=1/4 y verificación junto con las 18 T=8 correspondientes.
-7. Nueve supervisados sobre el proxy completo.
-8. Opcional: curva CIFAR con N=100/500/1000/5000, tres seeds; 12 supervisados y 36 EXPERT-logit. N=10000 se reutiliza del grid y del supervisado completo.
-9. Notebook definitivo de los tres contrastes. El análisis específico supervisado/curva aún debe desarrollarse como siguiente checkpoint; el lanzador genera sus CSV, no inventa esas gráficas.
+Los bloques T=8 se guardan por separado: `results.csv` (RQ1),
+`results_aggregation.csv` y `results_support.csv`. El notebook usa `STAGE`
+para cargar únicamente los bloques necesarios: 324 filas en RQ1, 378 en
+agregación y 432 en soporte. Temperatura requiere además sus 36 filas nuevas.
+No se exige ORACLE-prob; sigue disponible como método del runner para un
+control opcional con un CSV independiente. No hay una fase automática para él.
+El análisis gráfico específico de supervisado/curva sigue pendiente.
 
-Para incluir expresamente la curva propuesta:
+Se reutilizan caches completos y filas KD/CE por identidad. Los errores detienen
+la fase. Los teachers parciales no se borran ni se reanudan a mitad del modelo.
+El informe de reproducción debe corresponder al cache y receta actuales.
+El piloto puede repetirse tras RQ1: su auditoría selecciona sus tres brazos.
 
-```bash
-python run_article1_pipeline.py --execute --device cuda --with-proxy-curve
-```
-
-`--skip-notebooks` permite ejecutar los notebooks manualmente. Por defecto su ejecución exige un kernel Python 3 funcional con las dependencias instaladas; un error no se oculta. El modo `--partitions-only` nunca llega a entrenar modelos.
-
-Se reutilizan condiciones de teachers completas y filas KD/CE por identidad. La comprobación de reproducción del piloto se repite deliberadamente al volver a ejecutar el flujo completo. Un directorio de teachers parcial o incompatible requiere inspección: no se borra ni reanuda a mitad del teacher automáticamente. El flujo ejecuta comandos secuencialmente y se detiene en el primer error.
+KD base usa 30 épocas, proxy 10000 y batch 256: 1200 actualizaciones.
+CE y curva fijan 1200 actualizaciones explícitamente. Los subconjuntos de la
+curva son anidados y balanceados; N=100 usa batch efectivo 100. Por tanto el
+presupuesto se iguala por actualizaciones, no por ejemplos consumidos.
 
 ### A. Crear y revisar solo particiones
 
@@ -250,7 +279,7 @@ python -m article1.audit OUTPUTS/article1_v3/results.csv
 jupyter notebook notebooks/article1_definitive_analysis.ipynb
 ```
 
-Conditions exige las 54 fuentes. El notebook definitivo exige el grid de 486 filas T=8: no se presenta como ejecutable con resultados v3 aún ausentes. Para verificación completa de caches activar `VERIFY_CACHES`; comprobar CSV y huellas registradas no sustituye reconstruir los targets con las fuentes reales.
+Conditions exige las 54 fuentes. El notebook definitivo exige los bloques completos de la fase seleccionada (324/378/432 filas T=8): no se presenta como ejecutable con resultados v3 aún ausentes. Para verificación completa de caches activar `VERIFY_CACHES`; comprobar CSV y huellas registradas no sustituye reconstruir los targets con las fuentes reales.
 
 ## 9. Estado histórico y reinicio
 
@@ -285,3 +314,5 @@ La separación de expertise evita su reutilización para seleccionar el checkpoi
 - No se entrenaron teachers ni students sobre datasets reales. No se ha validado CUDA ni completado una cuadrícula científica v3.
 
 Revisión del lanzador completo: 44 pruebas correctas, incluidos modo plan sin ejecución, parada antes de entrenamiento en `--partitions-only` y reutilización CE/KD únicamente por identidad. Se reconstruyeron sin errores las 36 condiciones de MNIST/Fashion-MNIST con etiquetas oficiales; mínimos locales de validation: 80 y 17 ejemplos respectivamente. Las 18 configuraciones CIFAR se comprobaron con una fixture de sus recuentos de clase (mínimo 12 en validation), no con los archivos de imágenes: la descarga completa no se terminó en este entorno. El lanzador exige la comprobación con etiquetas oficiales de los tres datasets antes de entrenar. Los tamaños pequeños indican poca precisión estadística, no un solapamiento ni un defecto del reparto.
+
+Validación de la unificación por fases: 52 pruebas correctas; compilación del código y celdas del notebook correcta; lint correcto en los archivos modificados. No se han ejecutado entrenamientos reales en esta revisión.

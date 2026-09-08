@@ -17,6 +17,7 @@ import numpy as np
 
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
 from article1.distillation import METHODS, authority_from_expertise, build_target
+from article1.experiments import RQ1_METHODS
 from article1.hashes import array_sha256, artifact_commit, file_sha256
 
 
@@ -31,8 +32,9 @@ def audit(
     datasets: Iterable[str] = DATASETS,
     seeds: Iterable[int] = SEEDS,
     regimes: Iterable[str] = REGIMES,
-    methods: Iterable[str] = METHODS,
+    methods: Iterable[str] = RQ1_METHODS,
     temperature: float = 8.0,
+    subset: bool = False,
     sanity_temperatures: Iterable[float] | None = None,
 ) -> dict:
     """Audit one primary-temperature grid without conflating sensitivity rows.
@@ -90,6 +92,13 @@ def audit(
             )
         except (KeyError, ValueError):
             _issue(issues, "invalid_result_identity", row=row)
+            continue
+        if subset and not (
+            key[0] in expected_datasets
+            and key[1] in expected_seeds
+            and key[2] in expected_regimes
+            and key[3] in expected_methods
+        ):
             continue
         present_temperatures.add(observed_temperature)
         key_rows[key].append(row)
@@ -386,6 +395,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
     parser.add_argument(
+        "--subset",
+        action="store_true",
+        help="audit only the requested conditions and methods",
+    )
+    parser.add_argument(
         "--source-root", type=Path, default=Path("OUTPUTS/article1_v3/sources")
     )
     parser.add_argument(
@@ -395,7 +409,9 @@ def main() -> None:
         "--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS)
     )
     parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument(
+        "--methods", nargs="+", choices=METHODS, default=list(RQ1_METHODS)
+    )
     parser.add_argument(
         "--temperature",
         type=float,
@@ -417,6 +433,7 @@ def main() -> None:
         regimes=args.regimes,
         methods=args.methods,
         temperature=args.temperature,
+        subset=args.subset,
         sanity_temperatures=args.sanity_temperatures,
     )
     print(json.dumps(report, indent=2, sort_keys=True))

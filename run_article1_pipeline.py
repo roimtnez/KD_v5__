@@ -1,8 +1,7 @@
-"""Run the fixed Article-1 v3 workflow. Default: print a plan, do not execute.
+"""Sequential Article-1 v3 checkpoints. Plan by default; execute one explicit phase.
 
-Use --execute to run; --partitions-only stops before all model training.
-The optional proxy curve is enabled only with --with-proxy-curve.
-Run with the repository's Python environment (requirements + requirements-dev).
+Teachers and RQ1 precede separate aggregation, support and supervised studies.
+The pipeline never advances to the next scientific checkpoint automatically.
 """
 
 from __future__ import annotations
@@ -19,7 +18,11 @@ from pathlib import Path
 import numpy as np
 
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
+from article1.distillation import kd_config, metadata_identity
+from article1.experiments import PHASES, T8_BLOCKS
+from article1.hashes import file_sha256
 from article1.partitioning import ROLES, load_partitions, make_partitions
+from run_article1_grid import cache_identity
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "OUTPUTS" / "article1_v3"
@@ -88,7 +91,7 @@ def check_all_partitions():
     )
 
 
-def execute_notebook(name, *, dataset=None, seed=None):
+def execute_notebook(name, *, dataset=None, seed=None, stage=None):
     import nbformat
     from nbclient import NotebookClient
 
@@ -105,6 +108,15 @@ def execute_notebook(name, *, dataset=None, seed=None):
                 cell.source = re.sub(
                     r"^SEED = .*$", f"SEED = {seed}", cell.source, flags=re.MULTILINE
                 )
+    if stage is not None:
+        for cell in notebook.cells:
+            if cell.cell_type == "code":
+                cell.source = re.sub(
+                    r"^STAGE = .*$",
+                    f"STAGE = {stage!r}",
+                    cell.source,
+                    flags=re.MULTILINE,
+                )
     # A real kernel is required; no silent fallback that could hide execution failures.
     NotebookClient(
         notebook,
@@ -114,35 +126,86 @@ def execute_notebook(name, *, dataset=None, seed=None):
     ).execute()
     folder = OUT / "notebooks"
     folder.mkdir(parents=True, exist_ok=True)
-    filename = f"{dataset}-seed{seed}-{name}" if dataset is not None else name
+    filename = (
+        f"{dataset}-seed{seed}-{name}" if dataset is not None else f"{stage}-{name}"
+    )
     nbformat.write(notebook, folder / filename)
+
+
+PILOT = ("mnist", 42, "alpha0p1")
+PILOT_METHODS = ("feddf_logit", "expert_logit", "oracle_logit")
+
+
+def check_pilot():
+    """A reproduction report is a technical prerequisite, not scientific approval."""
+    cache = OUT / "sources" / "mnist-seed42-alpha0p1" / "teacher_cache.npz"
+    report = json.loads((OUT / "pilot_reproducibility.report.json").read_text())
+    expected = metadata_identity(
+        method="expert_logit",
+        temperature=8.0,
+        config=kd_config(),
+        **cache_identity(cache),
+    )
+    if (
+        report.get("reproducible") is not True
+        or report.get("result", {}).get("run_id") != expected
+    ):
+        raise ValueError(
+            "pilot report does not match the current cache/recipe; run --phase pilot"
+        )
+
+
+def check_sources():
+    """Verify all teacher conditions and their link to the current partitions."""
+    for dataset in DATASETS:
+        for seed in SEEDS:
+            for regime in REGIMES:
+                key = f"{dataset}-seed{seed}-{regime}"
+                partitions = OUT / "partitions" / key
+                load_partitions(partitions)
+                source = OUT / "sources" / key
+                metadata = json.loads((source / "metadata.json").read_text())
+                if (
+                    metadata.get("dataset"),
+                    metadata.get("seed"),
+                    metadata.get("regime"),
+                ) != (dataset, seed, regime):
+                    raise ValueError(f"source identity mismatch: {source}")
+                if metadata.get("partition_metadata_sha256") != file_sha256(
+                    partitions / "metadata.json"
+                ):
+                    raise ValueError(f"source/partition mismatch: {source}")
+                cache_identity(source / "teacher_cache.npz")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--execute", action="store_true", help="actually run the printed workflow"
+        "--phase",
+        choices=PHASES,
+        help="one checkpoint only; omission prints the sequence",
     )
     parser.add_argument(
-        "--partitions-only",
-        action="store_true",
-        help="create/check partitions and their plots, no training",
+        "--execute", action="store_true", help="execute the selected phase, then stop"
     )
-    parser.add_argument(
-        "--with-proxy-curve",
-        action="store_true",
-        help="also run 48 smaller-proxy CIFAR cells",
-    )
-    parser.add_argument(
-        "--skip-notebooks",
-        action="store_true",
-        help="leave notebook execution to the user",
-    )
+    parser.add_argument("--skip-notebooks", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     os.chdir(ROOT)
+    if not args.phase:
+        if args.execute:
+            parser.error(
+                "--execute requires an explicit --phase; there is no automatic all-phase run"
+            )
+        for number, phase in enumerate(PHASES, 1):
+            print(
+                f"{number}. python run_article1_pipeline.py --phase {phase} --execute"
+            )
+        print("Review each checkpoint before choosing the next. No commands executed.")
+        return
     if PROTOCOL_VERSION != "article1-v3":
         raise ValueError("this workflow is frozen for article1-v3")
+    phase = args.phase
 
     def run(*arguments):
         cmd = [sys.executable, *map(str, arguments)]
@@ -163,186 +226,250 @@ def main():
     def runner(*arguments):
         run("-m", "article1.runner", *arguments, "--device", args.device)
 
-    def note(text):
-        print("\n" + text, flush=True)
-
-    note("1. Quick checks, then create all 54 partitions.")
-    run(
-        "-m",
-        "compileall",
-        "-q",
-        "article1",
-        "run_article1_grid.py",
-        "run_article1_pipeline.py",
-    )
-    run("-m", "pytest", "-q")
-    grid("--stage", "partition")
-    note("2. Verify every partition before training.")
-    if args.execute:
-        check_all_partitions()
-        if args.device.startswith("cuda") and not args.partitions_only:
-            import torch
-
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "CUDA requested but unavailable; no training started"
-                )
-    if not args.skip_notebooks:
-        note(
-            "3. Execute partition notebook for all three datasets and seeds; export PNG/PDF."
+    def audit_block(block, *, pilot=False):
+        filename, methods = T8_BLOCKS[block]
+        extra = (
+            ["--datasets", "mnist", "--seeds", 42, "--regimes", "alpha0p1"]
+            if pilot
+            else []
         )
+        run(
+            "-m",
+            "article1.audit",
+            OUT / filename,
+            "--subset",
+            "--methods",
+            *(PILOT_METHODS if pilot else methods),
+            *extra,
+        )
+
+    def notebook(stage):
+        if not args.skip_notebooks:
+            print(f"Notebook analysis checkpoint: {stage}", flush=True)
+            if args.execute:
+                execute_notebook("article1_definitive_analysis.ipynb", stage=stage)
+
+    print(
+        f"Checkpoint: {phase}. No subsequent phase will run automatically.", flush=True
+    )
+    if args.execute and phase != "partitions" and args.device.startswith("cuda"):
+        import torch
+
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA requested but unavailable")
+    if phase == "partitions":
+        run(
+            "-m",
+            "compileall",
+            "-q",
+            "article1",
+            "run_article1_grid.py",
+            "run_article1_pipeline.py",
+        )
+        run("-m", "pytest", "-q")
+        grid("--stage", "partition")
         if args.execute:
+            check_all_partitions()
+            if not args.skip_notebooks:
+                for dataset in DATASETS:
+                    for seed in SEEDS:
+                        execute_notebook(
+                            "article1_partition_diagnostics.ipynb",
+                            dataset=dataset,
+                            seed=seed,
+                        )
+    elif phase == "pilot":
+        if args.execute:
+            check_all_partitions()
+        grid(
+            "--stage",
+            "teachers",
+            "--datasets",
+            "mnist",
+            "--seeds",
+            42,
+            "--regimes",
+            "alpha0p1",
+        )
+        # These three runs are part of RQ1. No probability/SR student runs here.
+        grid(
+            "--stage",
+            "distill",
+            "--datasets",
+            "mnist",
+            "--seeds",
+            42,
+            "--regimes",
+            "alpha0p1",
+            "--methods",
+            *PILOT_METHODS,
+        )
+        # The audit reconstructs every target variant, without training those students.
+        audit_block("rq1", pilot=True)
+        run(
+            "-m",
+            "article1.reproduce",
+            "--dataset",
+            "mnist",
+            "--seed",
+            42,
+            "--method",
+            "expert_logit",
+            "--cache",
+            OUT / "sources" / "mnist-seed42-alpha0p1" / "teacher_cache.npz",
+            "--device",
+            args.device,
+            "--results",
+            OUT / "pilot_reproducibility.csv",
+            "--report",
+            OUT / "pilot_reproducibility.report.json",
+        )
+    elif phase == "teachers":
+        if args.execute:
+            check_pilot()
+            check_all_partitions()
+        grid("--stage", "teachers")
+        if args.execute:
+            check_sources()
+        run("-m", "article1.conditions")
+    else:
+        if args.execute:
+            check_sources()
+        if phase == "rq1":
+            if args.execute:
+                check_pilot()
+            grid("--stage", "distill", "--methods", *T8_BLOCKS["rq1"][1])
+            run("-m", "article1.conditions")
+            audit_block("rq1")
+            notebook("rq1")
+        elif phase in ("aggregation", "temperature", "support"):
+            audit_block("rq1")
+            if phase != "aggregation":
+                audit_block("aggregation")
+            if phase in ("aggregation", "support"):
+                filename, methods = T8_BLOCKS[phase]
+                grid(
+                    "--stage",
+                    "distill",
+                    "--methods",
+                    *methods,
+                    "--results",
+                    OUT / filename,
+                )
+                audit_block(phase)
+            else:
+                grid(
+                    "--stage",
+                    "distill",
+                    "--datasets",
+                    "cifar",
+                    "--regimes",
+                    "iid",
+                    "alpha0p1",
+                    "single",
+                    "--methods",
+                    "expert_logit",
+                    "expert_prob",
+                    "--temperatures",
+                    1,
+                    4,
+                    "--results",
+                    OUT / "results_rq2_temperature.csv",
+                )
+                run(
+                    "-m",
+                    "article1.rq2",
+                    "--results",
+                    OUT / "results.csv",
+                    OUT / "results_aggregation.csv",
+                    OUT / "results_rq2_temperature.csv",
+                    "--source-root",
+                    OUT / "sources",
+                    "--temperatures",
+                    1,
+                    4,
+                    8,
+                    "--isolated-results",
+                    OUT / "results_rq2_temperature.csv",
+                )
+            notebook(phase)
+        elif phase == "supervised":
+            audit_block("rq1")
             for dataset in DATASETS:
                 for seed in SEEDS:
-                    execute_notebook(
-                        "article1_partition_diagnostics.ipynb",
-                        dataset=dataset,
-                        seed=seed,
+                    runner(
+                        "supervised",
+                        "--dataset",
+                        dataset,
+                        "--seed",
+                        seed,
+                        "--cache",
+                        OUT
+                        / "sources"
+                        / f"{dataset}-seed{seed}-iid"
+                        / "teacher_cache.npz",
+                        "--results",
+                        OUT / "results_supervised_proxy.csv",
+                        "--updates",
+                        1200,
+                        "--skip-existing",
                     )
-    if args.partitions_only:
-        return
-
-    pilot = OUT / "sources" / "mnist-seed42-iid" / "teacher_cache.npz"
-    note(
-        "4. Pilot: ten MNIST-IID teachers, three main methods, then exact KD repetition."
-    )
-    grid(
-        "--stage",
-        "all",
-        "--datasets",
-        "mnist",
-        "--seeds",
-        42,
-        "--regimes",
-        "iid",
-        "--methods",
-        "feddf_logit",
-        "expert_logit",
-        "oracle_logit",
-    )
-    run(
-        "-m",
-        "article1.reproduce",
-        "--dataset",
-        "mnist",
-        "--seed",
-        42,
-        "--method",
-        "expert_logit",
-        "--cache",
-        pilot,
-        "--device",
-        args.device,
-        "--results",
-        OUT / "reproducibility_check.csv",
-    )
-    note(
-        "5. Main v3 grid: reuse pilot teachers and main-grid cells; 486 T=8 results in total."
-    )
-    grid("--stage", "teachers")
-    grid("--stage", "distill")
-    run("-m", "article1.conditions")
-    run("-m", "article1.audit", OUT / "results.csv")
-    note("6. Focused temperature contrast: 36 new T=1/4 cells; reuse T=8 for analysis.")
-    grid(
-        "--stage",
-        "distill",
-        "--datasets",
-        "cifar",
-        "--regimes",
-        "iid",
-        "alpha0p1",
-        "single",
-        "--methods",
-        "expert_logit",
-        "expert_prob",
-        "--temperatures",
-        1,
-        4,
-        "--results",
-        OUT / "results_rq2_temperature.csv",
-    )
-    run(
-        "-m",
-        "article1.rq2",
-        "--results",
-        OUT / "results.csv",
-        OUT / "results_rq2_temperature.csv",
-        "--source-root",
-        OUT / "sources",
-        "--temperatures",
-        1,
-        4,
-        8,
-        "--isolated-results",
-        OUT / "results_rq2_temperature.csv",
-    )
-    note("7. Nine supervised full-proxy cells, reusable across regimes.")
-    for dataset in DATASETS:
-        for seed in SEEDS:
-            runner(
-                "supervised",
-                "--dataset",
-                dataset,
-                "--seed",
-                seed,
-                "--cache",
-                OUT / "sources" / f"{dataset}-seed{seed}-iid" / "teacher_cache.npz",
-                "--results",
-                OUT / "results_supervised_proxy.csv",
-                "--updates",
-                1200,
-                "--skip-existing",
-            )
-    if args.with_proxy_curve:
-        note(
-            "8. Optional curve: CIFAR N=100/500/1000/5000, three seeds, 12 CE + 36 EXPERT cells."
-        )
-        for seed in SEEDS:
-            for size in (100, 500, 1000, 5000):
-                common = [
+        elif phase == "proxy-curve":
+            audit_block("rq1")
+            # Complete/reuse the three CIFAR full-proxy references before the smaller subsets.
+            for seed in SEEDS:
+                runner(
+                    "supervised",
                     "--dataset",
                     "cifar",
                     "--seed",
                     seed,
-                    "--proxy-size",
-                    size,
-                    "--updates",
-                    1200,
-                    "--results",
-                    OUT / "results_proxy_size.csv",
-                    "--skip-existing",
-                ]
-                runner(
-                    "supervised",
                     "--cache",
                     OUT / "sources" / f"cifar-seed{seed}-iid" / "teacher_cache.npz",
-                    *common,
+                    "--results",
+                    OUT / "results_supervised_proxy.csv",
+                    "--updates",
+                    1200,
+                    "--skip-existing",
                 )
-                for regime in ("iid", "alpha0p1", "single"):
+                for size in (100, 500, 1000, 5000):
+                    common = [
+                        "--dataset",
+                        "cifar",
+                        "--seed",
+                        seed,
+                        "--proxy-size",
+                        size,
+                        "--updates",
+                        1200,
+                        "--results",
+                        OUT / "results_proxy_size.csv",
+                        "--skip-existing",
+                    ]
                     runner(
-                        "distill",
-                        "--method",
-                        "expert_logit",
-                        "--temperature",
-                        8,
+                        "supervised",
                         "--cache",
-                        OUT
-                        / "sources"
-                        / f"cifar-seed{seed}-{regime}"
-                        / "teacher_cache.npz",
+                        OUT / "sources" / f"cifar-seed{seed}-iid" / "teacher_cache.npz",
                         *common,
                     )
-    if not args.skip_notebooks:
-        note(
-            "9. Execute definitive results notebook; supervised/size-curve analysis remains a separate research checkpoint."
-        )
-        if args.execute:
-            execute_notebook("article1_definitive_analysis.ipynb")
-    note(
-        "Workflow complete."
+                    for regime in ("iid", "alpha0p1", "single"):
+                        runner(
+                            "distill",
+                            "--method",
+                            "expert_logit",
+                            "--temperature",
+                            8,
+                            "--cache",
+                            OUT
+                            / "sources"
+                            / f"cifar-seed{seed}-{regime}"
+                            / "teacher_cache.npz",
+                            *common,
+                        )
+    print(
+        "Checkpoint finished. Review its evidence before choosing the next phase."
         if args.execute
-        else "PLAN ONLY. Add --execute to run; --partitions-only stops before training."
+        else "PLAN ONLY. Add --execute to run this phase."
     )
 
 

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS, THRESHOLDS
-from article1.distillation import METHODS
+from article1.experiments import ANALYSIS_BLOCKS, T8_BLOCKS
 
 KEY = ["dataset", "regime", "seed"]
 IDENTITY = KEY + ["method", "temperature"]
@@ -94,12 +94,26 @@ def summarize(
     )
 
 
-def load_results(out: Path) -> dict:
+def load_results(out: Path, stage: str = "rq1") -> dict:
     """Validate CSV coverage and recorded provenance; this is NOT a cache audit."""
     from itertools import product
 
     out = Path(out)
-    main = pd.read_csv(out / "results.csv")
+    require(stage in ANALYSIS_BLOCKS, f"Unknown analysis stage: {stage}")
+    input_blocks = [T8_BLOCKS[name] for name in ANALYSIS_BLOCKS[stage]]
+    frames = []
+    for filename, methods in input_blocks:
+        frame = pd.read_csv(out / filename)
+        require(
+            "method" in frame and frame.method.isin(methods).all(),
+            f"Unexpected methods in {filename}",
+        )
+        require(
+            "temperature" in frame and frame.temperature.eq(8).all(),
+            f"Expected only T=8 in {filename}",
+        )
+        frames.append(frame)
+    main = pd.concat(frames, ignore_index=True)
     conditions = pd.read_csv(out / "conditions.csv")
     require(
         "protocol_version" in main and main.protocol_version.eq(PROTOCOL_VERSION).all(),
@@ -119,10 +133,11 @@ def load_results(out: Path) -> dict:
         "Duplicate result identities",
     )
     t8 = main[main.temperature.eq(8)].copy()
-    expected = set(product(DATASETS, REGIMES, SEEDS, METHODS, [8.0]))
+    methods = [m for _, block_methods in input_blocks for m in block_methods]
+    expected = set(product(DATASETS, REGIMES, SEEDS, methods, [8.0]))
     require(
-        len(t8) == 486 and set(map(tuple, t8[IDENTITY].values)) == expected,
-        "Expected the complete 486-row T=8 grid",
+        len(t8) == len(expected) and set(map(tuple, t8[IDENTITY].values)) == expected,
+        f"Incomplete T=8 grid for {stage}: expected {len(expected)} rows",
     )
     require(
         len(conditions) == 54
@@ -161,6 +176,7 @@ def load_results(out: Path) -> dict:
     )
     context = {
         "out": out,
+        "input_blocks": input_blocks,
         "t8": t8,
         "conditions": conditions,
         "temperature": None,
@@ -176,7 +192,7 @@ def load_results(out: Path) -> dict:
         },
     }
     path = out / "results_rq2_temperature.csv"
-    if path.is_file():
+    if stage == "temperature":
         extra = pd.read_csv(path)
         require(
             extra.dataset.eq("cifar").all()
@@ -221,16 +237,17 @@ def comparisons(context: dict) -> dict[str, pd.DataFrame]:
     result = {
         "routing": paired(t8, "expert_logit", "feddf_logit"),
         "oracle_gap": paired(t8, "oracle_logit", "expert_logit"),
-        "aggregation": paired(t8, "expert_prob", "expert_logit", fields=CRN + ROUTING),
-        "support": paired(
-            t8, "expert_prob_sr", "expert_prob", fields=CRN + ROUTING + [SUPPORT_MASS]
-        ),
     }
     for control in ["confidence_logit", "consensus_logit", "energy_logit"]:
         result[control] = paired(t8, "expert_logit", control)
-    result["oracle_aggregation"] = paired(
-        t8, "oracle_prob", "oracle_logit", fields=CRN + ROUTING
-    )
+    if t8.method.eq("expert_prob").any():
+        result["aggregation"] = paired(
+            t8, "expert_prob", "expert_logit", fields=CRN + ROUTING
+        )
+    if t8.method.eq("expert_prob_sr").any():
+        result["support"] = paired(
+            t8, "expert_prob_sr", "expert_prob", fields=CRN + ROUTING + [SUPPORT_MASS]
+        )
     if context["temperature"] is not None:
         result["temperature"] = paired(
             context["temperature"], "expert_prob", "expert_logit", fields=CRN + ROUTING

@@ -13,6 +13,7 @@ import numpy as np
 
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
 from article1.distillation import METHODS, kd_config, metadata_identity
+from article1.experiments import RQ1_METHODS
 from article1.hashes import array_sha256, file_sha256
 from article1.partitioning import load_partitions
 
@@ -85,7 +86,9 @@ def main() -> None:
         "--seeds", nargs="+", type=int, choices=SEEDS, default=list(SEEDS)
     )
     parser.add_argument("--regimes", nargs="+", choices=REGIMES, default=list(REGIMES))
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
+    parser.add_argument(
+        "--methods", nargs="+", choices=METHODS, default=list(RQ1_METHODS)
+    )
     parser.add_argument("--temperatures", nargs="+", type=float, default=[8.0])
     parser.add_argument(
         "--proxy-size",
