@@ -185,3 +185,22 @@ def test_supervised_identity_reusable_across_regimes(runtime):
         runner.supervised_proxy(
             **{**common, "results": common["results"].with_name("results.csv")}
         )
+
+
+@pytest.mark.parametrize("method", ["supervised", "expert_logit"])
+def test_skip_existing_avoids_training_only_for_identical_identity(
+    runtime, monkeypatch, method
+):
+    runner, common, _ = runtime
+    function = runner.supervised_proxy if method == "supervised" else runner.distill
+    extras = {} if method == "supervised" else {"method": method}
+    row = function(**common, **extras, updates=2, proxy_size=6)
+
+    def forbidden(**kwargs):
+        raise RuntimeError("training requested")
+
+    monkeypatch.setattr(runner, "_train_proxy", forbidden)
+    reused = function(**common, **extras, updates=2, proxy_size=6, skip_existing=True)
+    assert reused["run_id"] == row["run_id"]
+    with pytest.raises(RuntimeError, match="training requested"):
+        function(**common, **extras, updates=3, proxy_size=6, skip_existing=True)

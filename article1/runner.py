@@ -102,6 +102,33 @@ def _update_table(path: Path, row: dict) -> None:
         fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _existing_result(path: Path, run_id: str) -> dict | None:
+    """Reuse only a complete row with the requested immutable identity."""
+    if not Path(path).is_file():
+        return None
+    with Path(path).open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    if any(row.get("protocol_version") != PROTOCOL_VERSION for row in rows):
+        raise ValueError("refusing to reuse results from another/unknown protocol")
+    matches = [row for row in rows if row.get("run_id") == run_id]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate run_id: {run_id}")
+    if not matches:
+        return None
+    row = matches[0]
+    for key in (
+        "student_init_sha256",
+        "student_final_sha256",
+        "consumed_batches_sha256",
+    ):
+        if not row.get(key):
+            raise ValueError(f"incomplete existing result: {key}")
+    for key in ("student_test_accuracy", "student_test_nll", "updates"):
+        if not np.isfinite(float(row[key])):
+            raise ValueError(f"invalid existing result: {key}")
+    return row
+
+
 def supervised_proxy_identity(
     *, dataset: str, seed: int, proxy_hash: str, config: dict
 ) -> str:
@@ -261,6 +288,7 @@ def distill(
     device: str = "cpu",
     updates: int | None = None,
     proxy_size: int | None = None,
+    skip_existing: bool = False,
 ) -> dict:
     """Consume q directly; optional subsets require an explicit update budget."""
     if batch_size <= 0 or epochs <= 0 or (updates is not None and updates <= 0):
@@ -292,6 +320,8 @@ def distill(
         proxy_hash=info["proxy_sha256"],
         mask_hash=mask_hash,
     )
+    if skip_existing and (existing := _existing_result(results, run_id)) is not None:
+        return existing
     target = build_target(logits, labels, mask, method=method, temperature=temperature)
     trained = _train_proxy(
         dataset=dataset,
@@ -336,6 +366,7 @@ def supervised_proxy(
     batch_size: int = 256,
     device: str = "cpu",
     proxy_size: int | None = None,
+    skip_existing: bool = False,
 ) -> dict:
     """CE on the same reserved public examples; independent of teacher knowledge."""
     if updates <= 0 or batch_size <= 0:
@@ -359,6 +390,8 @@ def supervised_proxy(
     run_id = supervised_proxy_identity(
         dataset=dataset, seed=seed, proxy_hash=info["proxy_sha256"], config=config
     )
+    if skip_existing and (existing := _existing_result(results, run_id)) is not None:
+        return existing
     trained = _train_proxy(
         dataset=dataset,
         data_dir=data_dir,
@@ -421,6 +454,7 @@ def main() -> None:
     d.add_argument("--proxy-size", type=int)
     d.add_argument("--batch-size", type=int, default=256)
     d.add_argument("--device", default="cpu")
+    d.add_argument("--skip-existing", action="store_true")
     s = subs.add_parser("supervised")
     s.add_argument("--dataset", choices=DATASETS, required=True)
     s.add_argument("--seed", choices=SEEDS, type=int, required=True)
@@ -431,6 +465,7 @@ def main() -> None:
     s.add_argument("--proxy-size", type=int)
     s.add_argument("--batch-size", type=int, default=256)
     s.add_argument("--device", default="cpu")
+    s.add_argument("--skip-existing", action="store_true")
     args = parser.parse_args()
     if args.stage == "partition":
         _, eval_ds, _ = datasets_for(args.dataset, args.data_dir)
@@ -478,6 +513,7 @@ def main() -> None:
                     epochs=args.epochs,
                     updates=args.updates,
                     proxy_size=args.proxy_size,
+                    skip_existing=args.skip_existing,
                     batch_size=args.batch_size,
                     device=args.device,
                 ),
@@ -495,6 +531,7 @@ def main() -> None:
                     seed=args.seed,
                     updates=args.updates,
                     proxy_size=args.proxy_size,
+                    skip_existing=args.skip_existing,
                     batch_size=args.batch_size,
                     device=args.device,
                 ),

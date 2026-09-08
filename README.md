@@ -131,7 +131,7 @@ Para tamaños reducidos se exige `--updates` explícito en KD. Supervisado usa 1
 
 Se registran tamaño/hash del proxy maestro y seleccionado, etiquetas, política de selección, receta JSON, inicialización, estado final, updates, ejemplos vistos y épocas. `consumed_batches_sha256` incluye índices realmente consumidos y fronteras de batch. `batch_order_sha256` conserva la huella de permutaciones completas.
 
-La identidad supervisada excluye régimen y teachers: puede reutilizarse entre regímenes si coinciden dataset, seed, datos, inicialización y receta. No contarlo como réplicas independientes. La identidad KD incluye cache, máscara, proxy, método, temperatura y receta. Las filas de protocolos diferentes no se mezclan. Una invocación directa repetida vuelve a entrenar y hace upsert por run_id.
+La identidad supervisada excluye régimen y teachers: puede reutilizarse entre regímenes si coinciden dataset, seed, datos, inicialización y receta. No contarlo como réplicas independientes. La identidad KD incluye cache, máscara, proxy, método, temperatura y receta. Las filas de protocolos diferentes no se mezclan. Una invocación directa repetida vuelve a entrenar y hace upsert por run_id, salvo que se indique `--skip-existing`: entonces solo reutiliza una fila completa con exactamente esa identidad.
 
 ## 7. Organización
 
@@ -144,6 +144,7 @@ La identidad supervisada excluye régimen y teachers: puede reutilizarse entre r
 | `article1/distillation.py` | Máscara, routing, targets y pérdida KD |
 | `article1/runner.py`, `proxy.py` | CLI, runtime común CE/KD y selección N |
 | `run_article1_grid.py` | Plan explícito, dry-run y reutilización de ejecuciones compatibles |
+| `run_article1_pipeline.py` | Flujo completo v3 con comprobación de las 54 particiones, piloto, barridos, auditorías y notebooks |
 | `article1/audit.py`, `conditions.py`, `rq2.py` | Auditoría de fuentes, tabla de condiciones y control de temperatura |
 | `article1/analysis.py` | Contrastes emparejados y gráficas de resultados |
 | `article1/reproduce.py`, `hashes.py` | Reproducción de una celda y huellas |
@@ -164,6 +165,38 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 Solo análisis/pruebas ligeras: `pip install -r requirements-dev.txt`. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
+
+### Lanzador del flujo completo
+
+`run_article1_pipeline.py` debe estar en la raíz del repositorio actualizado. Por defecto **solo muestra el plan**, sin descargar datos ni entrenar:
+
+```bash
+python run_article1_pipeline.py
+python run_article1_pipeline.py --execute --partitions-only
+python run_article1_pipeline.py --execute --device cuda
+```
+
+El flujo completo realiza, en orden:
+
+1. Compilación y pruebas rápidas; creación/reutilización de las 54 particiones.
+2. Lectura de etiquetas oficiales de train y reconstrucción exacta de cada partición para verificar los índices guardados, además de manifiestos, cobertura, disjunción y proxy balanceado. Guarda `partition_check.json`. Un error detiene el flujo antes del entrenamiento.
+3. Notebook de particiones para los nueve pares dataset/seed: resultados en `OUTPUTS/article1_v3/notebooks/` y figuras en las rutas del notebook.
+4. Piloto MNIST/IID/42: teachers y tres métodos principales; dos ejecuciones adicionales para comprobar reproducción exacta de EXPERT-logit.
+5. Teachers restantes y grid principal: 54 condiciones de teachers (540 modelos locales) y 486 resultados KD T=8 en total, incluyendo el piloto. Generación de conditions y auditoría.
+6. Temperatura focal CIFAR/IID–α=0.1–single: 36 celdas T=1/4 y verificación junto con las 18 T=8 correspondientes.
+7. Nueve supervisados sobre el proxy completo.
+8. Opcional: curva CIFAR con N=100/500/1000/5000, tres seeds; 12 supervisados y 36 EXPERT-logit. N=10000 se reutiliza del grid y del supervisado completo.
+9. Notebook definitivo de los tres contrastes. El análisis específico supervisado/curva aún debe desarrollarse como siguiente checkpoint; el lanzador genera sus CSV, no inventa esas gráficas.
+
+Para incluir expresamente la curva propuesta:
+
+```bash
+python run_article1_pipeline.py --execute --device cuda --with-proxy-curve
+```
+
+`--skip-notebooks` permite ejecutar los notebooks manualmente. Por defecto su ejecución exige un kernel Python 3 funcional con las dependencias instaladas; un error no se oculta. El modo `--partitions-only` nunca llega a entrenar modelos.
+
+Se reutilizan condiciones de teachers completas y filas KD/CE por identidad. La comprobación de reproducción del piloto se repite deliberadamente al volver a ejecutar el flujo completo. Un directorio de teachers parcial o incompatible requiere inspección: no se borra ni reanuda a mitad del teacher automáticamente. El flujo ejecuta comandos secuencialmente y se detiene en el primer error.
 
 ### A. Crear y revisar solo particiones
 
@@ -250,3 +283,5 @@ La separación de expertise evita su reutilización para seleccionar el checkpoi
 - Se generaron y validaron particiones reales de MNIST, seed 42, en los seis regímenes. Frente al código anterior, coinciden exactamente el proxy y la asignación privada a cada cliente; cambia solo la división local.
 - Las seis celdas de código del notebook de particiones se ejecutaron secuencialmente en proceso, generando cuatro figuras PNG/PDF y dos tablas. El entorno impidió iniciar el kernel Jupyter por restricciones de sockets; queda comprobar esa vía de ejecución en el entorno del investigador.
 - No se entrenaron teachers ni students sobre datasets reales. No se ha validado CUDA ni completado una cuadrícula científica v3.
+
+Revisión del lanzador completo: 44 pruebas correctas, incluidos modo plan sin ejecución, parada antes de entrenamiento en `--partitions-only` y reutilización CE/KD únicamente por identidad. Se reconstruyeron sin errores las 36 condiciones de MNIST/Fashion-MNIST con etiquetas oficiales; mínimos locales de validation: 80 y 17 ejemplos respectivamente. Las 18 configuraciones CIFAR se comprobaron con una fixture de sus recuentos de clase (mínimo 12 en validation), no con los archivos de imágenes: la descarga completa no se terminó en este entorno. El lanzador exige la comprobación con etiquetas oficiales de los tres datasets antes de entrenar. Los tamaños pequeños indican poca precisión estadística, no un solapamiento ni un defecto del reparto.
