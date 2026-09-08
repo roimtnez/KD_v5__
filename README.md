@@ -15,7 +15,7 @@ Se estudia una **versión base y simple** de la propuesta:
 - Se asume disponibilidad de **etiquetas del proxy y máscara de competencia**. EXPERT utiliza ambas; no es label-free.
 - Máscara binaria estimada en holdout, con umbrales fijados previamente. No se eligen a partir del test ni se ajustan para eliminar fallbacks.
 - Se mantienen tres contrastes principales: selección de teachers, logits frente a probabilidades y distribución completa frente a soporte restringido.
-- Se añade al alcance científico la comparación con **entrenamiento supervisado sobre el mismo proxy** y su dependencia del número de muestras. Está pendiente de diseño e implementación; no existen resultados supervisados canónicos en este repositorio.
+- Se añade al alcance científico la comparación con **entrenamiento supervisado sobre el mismo proxy** y su dependencia del número de muestras. El código admite CE supervisada y subconjuntos de tamaño N con presupuesto emparejado; no existen aún resultados supervisados canónicos en este repositorio.
 
 La inferencia de la máscara a partir del modelo, el routing con proxy sin etiquetas, los estimadores continuos de competencia y la segunda destilación/personalización se reservan para trabajos posteriores. Una comprobación básica de cobertura y sensibilidad de los umbrales puede formar parte de las limitaciones o robustez de esta versión base; no es una nueva búsqueda para optimizar los resultados del test.
 
@@ -143,7 +143,8 @@ La semilla es la unidad de réplica dentro de cada dataset–régimen. Se inform
 | `article1/datasets.py`, `models.py` | Datos, transforms y arquitecturas |
 | `article1/local_training.py` | Entrenamiento local, checkpoint y cache |
 | `article1/distillation.py` | Máscara, routing, target y pérdida KD |
-| `article1/runner.py` | CLI de las tres etapas: partition, teachers, distill |
+| `article1/runner.py` | CLI: partition, teachers, distill y supervised; runtime común CE/KD |
+| `article1/proxy.py` | Selección anidada y estratificada de filas del proxy reservado |
 | `run_article1_grid.py` | Lanzador explícito, dry-run y reutilización por identidad |
 | `article1/hashes.py` | Huellas comunes y procedencia |
 | `article1/conditions.py` | Tabla de cobertura/procedencia por condición |
@@ -152,7 +153,7 @@ La semilla es la unidad de réplica dentro de cada dataset–régimen. Se inform
 | `article1/reproduce.py` | Dos ejecuciones de una celda para comprobar reproducción exacta |
 | `article1/analysis.py` | Validación CSV, tres contrastes, tablas y figuras compartidas |
 | `notebooks/article1_definitive_analysis.ipynb` | Secuencia corta de análisis y exportación |
-| `tests/test_article1.py` | Pruebas rápidas, principalmente NumPy/CPU |
+| `tests/` | Pruebas rápidas NumPy y runtime sintético CPU, sin descargar datasets |
 
 Se mantiene esta estructura pequeña para conservar rutas y caches existentes. No se añade un framework de experimentos.
 
@@ -205,6 +206,51 @@ python -m article1.runner distill --dataset mnist --seed 42 --method expert_logi
 ```
 
 Las etapas de partición y teachers ya completadas se conservan. Para un diseño distinto, usar otro `--output-root`; no sobrescribir ni reutilizar por nombre caches incompatibles.
+
+### Supervisado y curva de tamaños del proxy
+
+El comando sobre el proxy completo es:
+
+```bash
+python -m article1.runner supervised \
+  --dataset mnist --seed 42 \
+  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
+  --results OUTPUTS/article1/results_supervised_proxy.csv \
+  --updates 1200 --device cuda
+```
+
+Sin `--proxy-size` se usan **todas las filas del cache**, no un tamaño supuesto. Para el cache canónico de 10.000 ejemplos, batch 256 y 1200 updates equivalen a las 30 épocas KD históricas, incluyendo el último batch de 16 ejemplos en cada época.
+
+Para un punto de la curva, añadir el mismo `--proxy-size N` a ambos brazos. Ejemplo de sintaxis con N=1000 (no constituye una lista de tamaños acordada):
+
+```bash
+python -m article1.runner supervised \
+  --dataset mnist --seed 42 --proxy-size 1000 --updates 1200 \
+  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
+  --results OUTPUTS/article1/results_proxy_size.csv --device cuda
+
+python -m article1.runner distill \
+  --dataset mnist --seed 42 --proxy-size 1000 --updates 1200 \
+  --method expert_logit --temperature 8 \
+  --cache OUTPUTS/article1/sources/mnist-seed42-iid/teacher_cache.npz \
+  --results OUTPUTS/article1/results_proxy_size.csv --device cuda
+```
+
+Repetir esas celdas explícitas para los tamaños, seeds y regímenes previamente acordados. No se lanza automáticamente ningún barrido. `--epochs` y `--updates` son excluyentes en la CLI KD; KD con `--proxy-size` exige `--updates`. El modo histórico sin esas opciones conserva su receta e identidad. El modo de presupuesto explícito tiene una identidad distinta aunque coincida numéricamente con 30 épocas: no mezclar ambos como réplicas independientes.
+
+**Selección:** se permutan por seed los índices públicos de cada clase y se intercalan las clases. Los conjuntos son anidados al aumentar N y se devuelven en el orden original del cache. Con proxy maestro balanceado, tamaños múltiplos de 10 mantienen balance exacto; otros tamaños difieren como máximo en una muestra por clase (se priorizan las clases en orden ascendente para el resto). El proxy completo no se reordena. Teachers, máscara y particiones privadas permanecen fijos. Nunca usar la opción homónima de `partition` para este estudio.
+
+**Comparabilidad implementada:** CE y KD comparten función de entrenamiento, arquitectura, secuencia de inicialización, vista determinista sin augmentation, AdamW (lr=1e−3, weight decay=1e−4), batch solicitado (256 por defecto), orden por seed y época, ausencia de scheduler, número exacto de actualizaciones y evaluación final. CE usa etiquetas enteras; KD consume q directamente con T²KL y T=8 por defecto. El test no selecciona checkpoints ni hiperparámetros. Esta es una comparación de presupuesto igualado, no de rendimiento óptimo tras ajuste separado. KD incorpora conocimiento privado mediante los teachers; CE solo usa las etiquetas públicas.
+
+Ambos verifican metadata, SHA256 del cache y correspondencia de etiquetas con el dataset público antes de optimizar. El supervisado no utiliza logits ni máscara como señal de aprendizaje. Su identidad excluye cache y régimen, pero incluye dataset, seed, índices, etiquetas y receta; se puede reutilizar entre regímenes únicamente si coincide todo ello. La procedencia del cache se registra aparte.
+
+**Registro para el notebook:** `proxy_size`, `proxy_master_size`, hashes de índices maestros/seleccionados y etiquetas, política/seed de selección, receta JSON, estado inicial/final, `updates`, `examples_seen`, `epochs_completed` y `epochs_started`. `consumed_batches_sha256` identifica los índices realmente usados, incluyendo fronteras de batch. Se conserva `batch_order_sha256` para comparar con el histórico: representa permutaciones completas y, cuando hay una época parcial, no sustituye la huella de consumo. Las filas históricas carecen de esta nueva huella; comparar también tamaño, presupuesto y receta.
+
+Al emparejar CE con KD en el notebook, usar dataset, seed, tamaño, hashes de proxy/etiquetas, inicialización, presupuesto y receta; asociar el mismo CE a los regímenes compatibles. Exigir igualdad de `consumed_batches_sha256` cuando exista en ambos. No emparejar por `run_id` ni contar el CE reutilizado como nuevas réplicas. Comprobar explícitamente los hashes, no inferir igualdad solo por N.
+
+Con N<256, el batch efectivo es N; se conserva el último batch incompleto. Presupuesto fijo no iguala épocas ni ejemplos consumidos entre tamaños: el CSV hace visible esa diferencia. No se mide todavía un punto de cruce ni se ha fijado un umbral de rendimiento «decente».
+
+El supervisado y las ejecuciones KD con tamaño/presupuesto explícito rechazan una salida llamada `results.csv`, para proteger el grid histórico. El CSV separado hace upsert por identidad; repetir exactamente una celda vuelve a entrenarla y sustituye su fila, no crea otra réplica.
 
 ### Temperatura: salida separada
 
@@ -264,7 +310,7 @@ La base de código inspeccionada antes de esta limpieza fue `baa0e2d`. Las cifra
 | Ejemplo de dependencia de T | CIFAR-10 α=0.1: prob−logit = −3,92 ± 0,34 pp a T=1; +0,57 ± 0,35 a T=8 |
 | Soporte restringido, T=8 | NLL del target mejora en 51/54 pares; accuracy del estudiante baja en 34/54; ambas cosas suceden en 32/54 |
 | SR por condición | En CIFAR-10, pérdidas de 4,86–6,83 pp de media en IID/Dirichlet; Single gana 1,43 ± 0,80 pp de accuracy pero empeora NLL |
-| Supervisado y tamaño del proxy | Pendiente; no se conoce aún un N suficiente ni un punto de cruce |
+| Supervisado y tamaño del proxy | Runtime CE/KD y selección N implementados; ejecuciones y curva pendientes |
 
 El CSV principal adjunto contiene 504 filas: 486 a T=8 y 18 a temperaturas inferiores, conservadas históricamente. El CSV aislado aporta 27 filas adicionales. El análisis filtra T=8 y combina las filas pertinentes para temperatura sin duplicarlas; esta limpieza no mueve ni reescribe filas originales. Nueve pares prob/SR a T inferior tienen cobertura incompleta y no se mezclan con RQ2-B a T=8.
 
@@ -298,18 +344,18 @@ Selective-FD se dejó fuera de la comparación principal por diferencias de prot
 
 **Pregunta añadida al Artículo 1:** ¿cuánto conocimiento adicional aprovecha KD frente a entrenar el mismo modelo únicamente con las etiquetas de esos N ejemplos públicos? ¿A partir de qué N el supervisado alcanza un criterio de rendimiento útil, y dónde cambia el signo de KD−supervisado?
 
-Esta parte aún no tiene tamaños N, presupuesto ni umbral de «rendimiento decente» congelados. No se inventan cruces a partir de los resultados T=8 actuales.
+El código implementa presupuesto emparejado explícito de 1200 updates por defecto; aún hay que acordar la lista de tamaños N y cualquier criterio de «rendimiento decente». No se inventan cruces a partir de los resultados T=8 actuales.
 
 - [ ] Definir antes de ejecutar qué significa «decente»: un criterio de aplicación o referencia explícita, no un corte retrospectivo que favorezca KD. Si se seleccionan hiperparámetros o parada, usar validación separada; nunca test.
 - [ ] Seleccionar una lista pequeña de tamaños N y subconjuntos anidados y reproducibles del **proxy ya reservado**, compartidos entre supervisado y KD.
-- [ ] Mantener particiones privadas, teachers, máscara e índices maestros fijos al variar N. **No usar `--proxy-size` de la partición para este estudio:** cambiaría también los datos disponibles para los clientes. El futuro soporte N debe seleccionar filas del cache existente.
-- [ ] Implementar un baseline supervisado desde la misma inicialización, arquitectura y muestras proxy, usando cross-entropy con sus etiquetas reales. KD usa los mismos N ejemplos y, además, el conocimiento de los teachers y la máscara.
+- [x] Mantener particiones privadas, teachers, máscara e índices maestros fijos al variar N. **No usar `--proxy-size` de la partición para este estudio:** cambiaría también los datos disponibles para los clientes. El soporte N selecciona filas del cache existente.
+- [x] Implementar un baseline supervisado desde la misma inicialización, arquitectura y muestras proxy, usando cross-entropy con sus etiquetas reales. KD usa los mismos N ejemplos y, además, el conocimiento de los teachers y la máscara.
 - [ ] Acordar un presupuesto comparable antes de medir: fijar épocas no fija actualizaciones al variar N. Una referencia con updates emparejados responde a un contraste distinto de entrenar cada método hasta convergencia con validación. Decidir el principal y evitar un barrido de ambas cosas sin necesidad.
-- [ ] Incorporar N, índices seleccionados, tipo de entrenamiento y receta a la identidad de las nuevas ejecuciones. Usar un CSV separado, por ejemplo `results_proxy_size.csv`; no mezclarlo con el grid histórico.
+- [x] Incorporar N, índices seleccionados, tipo de entrenamiento y receta a la identidad de las nuevas ejecuciones. Usar un CSV separado, por ejemplo `results_proxy_size.csv`; no mezclarlo con el grid histórico.
 - [ ] Reutilizar el supervisado entre regímenes cuando dataset, seed, N, índices, inicialización y receta sean realmente idénticos. El supervisado no depende por sí mismo de cómo se repartieron los datos privados entre clientes; no repetirlo seis veces ni contarlo como seis réplicas independientes.
 - [ ] Evaluar accuracy y NLL, diferencias emparejadas por N y seeds, y el intervalo entre tamaños ensayados en el que cambia el signo. Puede no haber cruce, haber varios o diferir por dataset/régimen; no asumir un umbral universal ni interpolar como si estuviera observado.
 
-No están implementados todavía el brazo supervisado ni la selección N para KD. Se harán tras acordar este diseño mínimo, sin volver a entrenar teachers innecesariamente.
+El brazo supervisado y la selección N para ambos métodos están implementados. Pendientes: acordar los tamaños y celdas, ejecutar en el entorno experimental y añadir al notebook las curvas emparejadas. No se han ejecutado nuevas pruebas científicas ni vuelto a entrenar teachers.
 
 ### C. Trabajos posteriores: fuera de la versión base
 
@@ -335,3 +381,5 @@ Esta limpieza:
 - Corrige el destino por defecto de reproducción para proteger el CSV principal.
 
 Validación de esta revisión: **20 pruebas correctas y una omitida** (determinismo del runtime, por ausencia de PyTorch), compilación correcta y **27 comparaciones de targets antes/después exactamente iguales** (nueve métodos × T=1,4,8 con entradas sintéticas). Las seis celdas de código del notebook se ejecutaron en proceso con los CSV facilitados, generando 13 tablas y cinco figuras en PNG/PDF sin modificar los CSV fuente. El entorno impidió arrancar un kernel Jupyter por restricciones de sockets; la verificación se hizo ejecutando las celdas secuencialmente. La ejecución de entrenamiento/CUDA y la auditoría con caches reales no se sustituyen por estas comprobaciones. No se ejecutó nueva KD.
+
+Validación de la extensión supervisada/proxy (2026-09-08): 30 pruebas correctas con PyTorch/torchvision CPU, incluidas pruebas sintéticas de emparejamiento CE/KD, épocas parciales, integridad del cache, selección anidada y repetibilidad. Tres comparaciones sintéticas adicionales contra el runner previo conservaron exactamente todos los campos históricos, incluido el hash final del student y el run_id (FedDF-logit, EXPERT-prob y EXPERT-prob-SR). No valida ejecución CUDA ni sustituye una comprobación con los caches reales.
