@@ -19,7 +19,7 @@ import numpy as np
 
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
 from article1.distillation import kd_config, metadata_identity
-from article1.experiments import PHASES, T8_BLOCKS
+from article1.experiments import FOCAL_REGIMES, OPTIONAL_PHASES, PHASES, T8_BLOCKS
 from article1.hashes import file_sha256
 from article1.partitioning import ROLES, load_partitions, make_partitions
 from run_article1_grid import cache_identity
@@ -133,15 +133,17 @@ def execute_notebook(name, *, dataset=None, seed=None, stage=None):
 
 
 PILOT = ("mnist", 42, "alpha0p1")
-PILOT_METHODS = ("feddf_logit", "expert_logit", "oracle_logit")
+PILOT_METHODS = ("feddf_logit", "oracle_logit")
 
 
 def check_pilot():
     """A reproduction report is a technical prerequisite, not scientific approval."""
     cache = OUT / "sources" / "mnist-seed42-alpha0p1" / "teacher_cache.npz"
-    report = json.loads((OUT / "pilot_reproducibility.report.json").read_text())
+    report = json.loads(
+        (OUT / "pilot_selection_reproducibility.report.json").read_text()
+    )
     expected = metadata_identity(
-        method="expert_logit",
+        method="oracle_logit",
         temperature=8.0,
         config=kd_config(),
         **cache_identity(cache),
@@ -182,7 +184,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--phase",
-        choices=PHASES,
+        choices=PHASES + OPTIONAL_PHASES,
         help="one checkpoint only; omission prints the sequence",
     )
     parser.add_argument(
@@ -201,6 +203,7 @@ def main():
             print(
                 f"{number}. python run_article1_pipeline.py --phase {phase} --execute"
             )
+        print("Optional phases: " + ", ".join(OPTIONAL_PHASES))
         print("Review each checkpoint before choosing the next. No commands executed.")
         return
     if PROTOCOL_VERSION != "article1-v3":
@@ -291,7 +294,7 @@ def main():
             "--regimes",
             "alpha0p1",
         )
-        # These three runs are part of RQ1. No probability/SR student runs here.
+        # These two runs are part of RQ1. No probability/SR student runs here.
         grid(
             "--stage",
             "distill",
@@ -303,6 +306,8 @@ def main():
             "alpha0p1",
             "--methods",
             *PILOT_METHODS,
+            "--results",
+            OUT / T8_BLOCKS["rq1"][0],
         )
         # The audit reconstructs every target variant, without training those students.
         audit_block("rq1", pilot=True)
@@ -314,15 +319,15 @@ def main():
             "--seed",
             42,
             "--method",
-            "expert_logit",
+            "oracle_logit",
             "--cache",
             OUT / "sources" / "mnist-seed42-alpha0p1" / "teacher_cache.npz",
             "--device",
             args.device,
             "--results",
-            OUT / "pilot_reproducibility.csv",
+            OUT / "pilot_selection_reproducibility.csv",
             "--report",
-            OUT / "pilot_reproducibility.report.json",
+            OUT / "pilot_selection_reproducibility.report.json",
         )
     elif phase == "teachers":
         if args.execute:
@@ -335,38 +340,45 @@ def main():
     else:
         if args.execute:
             check_sources()
-        if phase == "rq1":
-            if args.execute:
-                check_pilot()
-            grid("--stage", "distill", "--methods", *T8_BLOCKS["rq1"][1])
-            run("-m", "article1.conditions")
-            audit_block("rq1")
-            notebook("rq1")
-        elif phase in ("aggregation", "temperature", "support"):
-            audit_block("rq1")
-            if phase != "aggregation":
-                audit_block("aggregation")
-            if phase in ("aggregation", "support"):
-                filename, methods = T8_BLOCKS[phase]
-                grid(
-                    "--stage",
-                    "distill",
-                    "--methods",
-                    *methods,
-                    "--results",
-                    OUT / filename,
-                )
-                audit_block(phase)
+        if phase in T8_BLOCKS:
+            if phase == "rq1":
+                if args.execute:
+                    check_pilot()
+                run("-m", "article1.conditions")
             else:
+                audit_block("rq1")
+            if phase in {"expertise", "support"}:
+                audit_block("aggregation")
+            if phase == "support":
+                audit_block("expertise")
+            filename, methods = T8_BLOCKS[phase]
+            grid(
+                "--stage", "distill", "--methods", *methods, "--results", OUT / filename
+            )
+            audit_block(phase)
+            notebook(phase)
+        elif phase in {"expert-logit", "temperature"}:
+            audit_block("expertise")
+            focal = ["--datasets", "cifar", "--regimes", *FOCAL_REGIMES]
+            diagnostic = OUT / "results_expert_logit_focal.csv"
+            grid(
+                "--stage",
+                "distill",
+                *focal,
+                "--methods",
+                "expert_logit",
+                "--results",
+                diagnostic,
+            )
+            run("-m", "article1.audit", diagnostic, "--methods", "expert_logit", *focal)
+            temperatures = [8]
+            files = [OUT / T8_BLOCKS["expertise"][0], diagnostic]
+            extra = OUT / "results_expert_temperature.csv"
+            if phase == "temperature":
                 grid(
                     "--stage",
                     "distill",
-                    "--datasets",
-                    "cifar",
-                    "--regimes",
-                    "iid",
-                    "alpha0p1",
-                    "single",
+                    *focal,
                     "--methods",
                     "expert_logit",
                     "expert_prob",
@@ -374,25 +386,40 @@ def main():
                     1,
                     4,
                     "--results",
-                    OUT / "results_rq2_temperature.csv",
+                    extra,
                 )
-                run(
-                    "-m",
-                    "article1.rq2",
-                    "--results",
-                    OUT / "results.csv",
-                    OUT / "results_aggregation.csv",
-                    OUT / "results_rq2_temperature.csv",
-                    "--source-root",
-                    OUT / "sources",
-                    "--temperatures",
-                    1,
-                    4,
-                    8,
-                    "--isolated-results",
-                    OUT / "results_rq2_temperature.csv",
+                files.append(extra)
+                temperatures = [1, 4, 8]
+            arguments = [
+                "-m",
+                "article1.rq2",
+                "--results",
+                *files,
+                "--source-root",
+                OUT / "sources",
+                "--temperatures",
+                *temperatures,
+            ]
+            if phase == "temperature":
+                arguments += ["--isolated-results", extra]
+            run(*arguments)
+            if args.execute:
+                from article1.analysis import (
+                    export,
+                    focal_comparisons,
+                    plot_temperature,
+                    summarize,
                 )
-            notebook(phase)
+
+                effect = focal_comparisons(OUT, temperatures=temperatures)
+                export(
+                    OUT / phase,
+                    {
+                        "paired": effect,
+                        "summary": summarize(effect, groups=["regime", "temperature"]),
+                    },
+                    {"operator_effect": plot_temperature(effect)},
+                )
         elif phase == "supervised":
             audit_block("rq1")
             for dataset in DATASETS:
@@ -415,7 +442,7 @@ def main():
                         "--skip-existing",
                     )
         elif phase == "proxy-curve":
-            audit_block("rq1")
+            audit_block("expertise")
             # Complete/reuse the three CIFAR full-proxy references before the smaller subsets.
             for seed in SEEDS:
                 runner(
@@ -443,7 +470,7 @@ def main():
                         "--updates",
                         1200,
                         "--results",
-                        OUT / "results_proxy_size.csv",
+                        OUT / "results_proxy_size_expert_prob.csv",
                         "--skip-existing",
                     ]
                     runner(
@@ -456,7 +483,7 @@ def main():
                         runner(
                             "distill",
                             "--method",
-                            "expert_logit",
+                            "expert_prob",
                             "--temperature",
                             8,
                             "--cache",

@@ -22,7 +22,8 @@ def test_default_is_sequence_plan(monkeypatch, capsys):
     "stage,methods",
     [
         ("rq1", list(pipeline.T8_BLOCKS["rq1"][1])),
-        ("aggregation", ["expert_prob"]),
+        ("aggregation", ["feddf_prob", "oracle_prob"]),
+        ("expertise", ["expert_prob"]),
         ("support", ["expert_prob_sr"]),
     ],
 )
@@ -76,3 +77,12 @@ def test_execute_requires_explicit_phase(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["pipeline", "--execute"])
     with pytest.raises(SystemExit, match="2"):
         pipeline.main()
+
+
+def test_minimal_sequence_excludes_optional_full_grids(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["pipeline"])
+    pipeline.main()
+    plan = capsys.readouterr().out
+    assert "--phase expertise --execute" in plan
+    assert "--phase controls --execute" not in plan
+    assert "--phase temperature --execute" not in plan

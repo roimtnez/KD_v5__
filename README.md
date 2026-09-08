@@ -10,13 +10,15 @@ Repositorio pequeño de investigación sobre **one-shot federated knowledge dist
 - Un entrenamiento local por teacher, un cache común de salidas sobre el proxy y un único student global. Sin rondas posteriores de comunicación.
 - Proxy público etiquetado y máscara binaria disponibles. EXPERT no es label-free.
 - Umbrales previos: MNIST 0.90, Fashion-MNIST 0.80, CIFAR-10 0.70. No se declaran óptimos ni se ajustan sobre test para mejorar resultados o eliminar fallbacks.
-- Tres contrastes controlados y una comparación adicional frente al entrenamiento supervisado con las etiquetas del mismo proxy.
+- Cuatro bloques secuenciales: selección oracular, operador, expertise y soporte; supervisado como extensión independiente.
 
 | Pregunta | Contraste | Se mantiene fijo |
 |---|---|---|
-| WHO: quién contribuye | `expert_logit − feddf_logit` | Agregación de logits, teachers, proxy, inicialización, orden y presupuesto |
-| HOW: cómo se agrega | `expert_prob − expert_logit` | Routing EXPERT y temperatura de cada contraste |
-| WHAT: qué soporte se conserva | `expert_prob_sr − expert_prob` | Routing y media de probabilidades |
+| Selección idealizada | `oracle_logit − feddf_logit` | Operador logit y presupuesto; ORACLE selecciona aciertos, no competencia acreditada |
+| Operador | `feddf_prob − feddf_logit`; `oracle_prob − oracle_logit` | Selección y temperatura |
+| Propuesta EXPERT | `expert_prob − feddf_prob`; gap `oracle_prob − expert_prob` | Operador probabilístico |
+| Soporte | `expert_prob_sr − expert_prob` | Routing EXPERT y operador probabilístico |
+
 
 Inferencia de máscaras desde modelos, proxies sin etiquetas, competencia continua y segunda destilación/personalización quedan para trabajos posteriores. Cada nueva variante necesita una pregunta independiente.
 
@@ -104,6 +106,7 @@ Sean `p_k = softmax(z_k/T)`, `L(w)=softmax(sum_k w_k z_k/T)` y `P(w)=sum_k w_k p
 | Método | Selección/pesos | Target |
 |---|---|---|
 | `feddf_logit` | Uniformes, todos | L(w) |
+| `feddf_prob` | Uniformes, todos | P(w) |
 | `expert_logit` | Uniformes entre M[k,y]=1 | L(w) |
 | `oracle_logit` | Uniformes entre argmax(z_k)=y | L(w) |
 | `confidence_logit` | MSP a T=1, seguido de softmax entre teachers | L(w) |
@@ -116,6 +119,10 @@ Sean `p_k = softmax(z_k/T)`, `L(w)=softmax(sum_k w_k z_k/T)` y `P(w)=sum_k w_k p
 Un conjunto seleccionado vacío usa el mismo fallback **FedDF-logit**, también en brazos prob/SR. Se contabiliza y se comprueba igualdad de targets. Consensus puede quedar vacío aunque haya diez teachers.
 
 FedDF es una adaptación one-shot de su componente de ensemble distillation, no una reproducción del protocolo iterativo completo. Confidence, Consensus y Energy son controles internos. Energy depende de escalas y offsets aditivos de logits; su peso no acredita expertise. ORACLE usa etiquetas y no es un límite superior garantizado del rendimiento del student.
+
+EXPERT-prob es el método base propuesto: selecciona teachers con M[k,y]=1 y conserva su distribución completa. Poner clases a cero y renormalizar define EXPERT-prob-SR, una ablación distinta. En logit aggregation se ponen a cero pesos de teachers excluidos, no coordenadas de clase.
+
+SR revisión 2 calcula softmax dentro del soporte (restando el máximo permitido); equivale matemáticamente a enmascarar probabilidades y renormalizar, pero evita descartar teachers por masa menor que EPS o por underflow. Sus filas registran `target_revision=2`, su run_id cambia y la auditoría rechaza revisiones anteriores. No se reentrenan teachers por esta corrección; solo las KD SR afectadas. Las identidades de los demás métodos se conservan.
 
 Logits y probabilidades no son operadores equivalentes. En SR, la probabilidad normalizada de la clase verdadera no puede disminuir para un experto seleccionado; mejorar NLL del target es parcialmente consecuencia de la construcción y no prueba que el conocimiento eliminado perjudique KD. No se implementan class-supported ni ORACLE+SR.
 
@@ -166,28 +173,25 @@ python -m pip install -r requirements.txt -r requirements-dev.txt
 
 Solo análisis/pruebas ligeras: `pip install -r requirements-dev.txt`. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
 
-### Ejecución por fases
+### Ejecución por fases: diseño mínimo
 
-`run_article1_pipeline.py` muestra la secuencia sin ejecutar nada. Para ejecutar
-hay que indicar `--phase` y `--execute`. Cada invocación termina en esa fase.
+Sin argumentos, `run_article1_pipeline.py` muestra la secuencia principal. Una
+fase requiere `--phase` y `--execute`; termina sin lanzar las posteriores.
 
-| Fase | Trabajo |
-|---|---|
-| `partitions` | Pruebas, 54 particiones, reconstrucción con etiquetas oficiales y heatmaps |
-| `pilot` | Teachers de MNIST/alpha0p1/42, tres KD logit reutilizables y dos repeticiones técnicas de EXPERT |
-| `teachers` | Verifica el piloto; completa los 540 teachers, máscaras y logits; genera conditions.csv |
-| `rq1` | 324 KD T=8: FedDF, EXPERT, ORACLE, Confidence, Consensus y Energy, todos logit; analiza RQ1 |
-| `aggregation` | 54 EXPERT-prob; compara con EXPERT-logit existente |
-| `temperature` | 36 KD CIFAR IID/alpha0p1/single, T=1/4; compara con T=8 |
-| `support` | 54 EXPERT-prob-SR; compara con EXPERT-prob existente |
-| `supervised` | 9 CE con proxy completo, tres datasets × tres seeds |
-| `proxy-curve` | 12 CE + 36 EXPERT-logit nuevos en CIFAR N=100/500/1000/5000; reutiliza KD N=10000 y completa/reutiliza sus tres CE ancla |
+| Fase principal | Ejecución nueva desde cero | Archivo T=8 |
+|---|---|---|
+| `partitions` | 54 particiones y heatmaps | Índices compartidos v3 |
+| `pilot` | MNIST/alpha0p1/42: teachers, FedDF-logit y ORACLE-logit; dos repeticiones técnicas de ORACLE | Las dos KD se reutilizan en selección |
+| `teachers` | Completar las 54 condiciones, 540 teachers; máscaras y logits | Caches compartidos v3 y conditions.csv |
+| `rq1` | 108 KD: FedDF-logit y ORACLE-logit | results_selection.csv |
+| `aggregation` | 108 KD: FedDF-prob y ORACLE-prob | results_pooling.csv |
+| `expertise` | 54 KD: EXPERT-prob | results_expertise.csv |
+| `support` | 54 KD: EXPERT-prob-SR, revisión 2 | results_support_v2.csv |
 
-El piloto entrena primero una condición para detectar problemas antes de pagar
-el barrido de teachers. Cada teacher usa train para gradientes, validation para
-seleccionar checkpoint y expertise para construir M después de congelarlo.
-El mismo checkpoint genera los logits del proxy. El test oficial evalúa el
-student final; no selecciona checkpoints, umbrales o temperaturas.
+**Total principal: 324 KD científicas**, incluyendo las dos del piloto.
+Comparado con el diseño anterior de ocho brazos completos (432), se ahorran
+108 KD antes de añadir diagnósticos opcionales. No incluir controles opcionales
+limita la comparación principal a FedDF/ORACLE/EXPERT; no es un benchmark SOTA.
 
 ```bash
 python run_article1_pipeline.py
@@ -195,37 +199,56 @@ python run_article1_pipeline.py --phase partitions --execute
 python run_article1_pipeline.py --phase pilot --execute --device cuda
 python run_article1_pipeline.py --phase teachers --execute --device cuda
 python run_article1_pipeline.py --phase rq1 --execute --device cuda
-# Revisar cada bloque antes de continuar:
 python run_article1_pipeline.py --phase aggregation --execute --device cuda
-python run_article1_pipeline.py --phase temperature --execute --device cuda
+python run_article1_pipeline.py --phase expertise --execute --device cuda
 python run_article1_pipeline.py --phase support --execute --device cuda
+```
+
+Los teachers usan train para gradientes, validation para seleccionar checkpoint,
+y expertise para estimar M tras congelarlo. El test oficial evalúa el student
+final. Este cambio no modifica particiones ni entrenamiento local.
+
+La secuencia no decide automáticamente el operador mirando accuracy de test.
+EXPERT-prob se fija como propuesta por su combinación normalizada y su extensión
+natural a SR. La comparación FedDF/ORACLE caracteriza el operador; no demuestra
+que EXPERT-logit sea equivalente. Ausencia de significación no prueba igualdad:
+para hablar de equivalencia práctica hace falta un margen previo y precisión
+suficiente. No se fija un margen arbitrario en el código. Tres seeds ofrecen
+precisión limitada. Las figuras muestran media y desviación estándar de efectos
+emparejados, no un test automático de equivalencia.
+
+| Fase opcional | Coste y finalidad |
+|---|---|
+| `controls` | 108 KD Consensus-logit/Energy-logit, contra FedDF-logit; Confidence queda disponible solo en el runner |
+| `expert-logit` | 9 KD CIFAR IID/alpha0p1/single × tres seeds a T=8; compara con EXPERT-prob existente |
+| `temperature` | Completa/reutiliza esas 9 KD y añade 36 T=1/4 EXPERT-logit/prob |
+| `supervised` | 9 CE con proxy completo |
+| `proxy-curve` | 12 CE + 36 EXPERT-prob CIFAR N=100/500/1000/5000; reutiliza KD N=10000 y completa/reutiliza tres CE ancla |
+
+```bash
+python run_article1_pipeline.py --phase expert-logit --execute --device cuda
+python run_article1_pipeline.py --phase controls --execute --device cuda
 python run_article1_pipeline.py --phase supervised --execute --device cuda
 python run_article1_pipeline.py --phase proxy-curve --execute --device cuda
 ```
 
-Sin `--execute`, una fase solo imprime su plan. `--skip-notebooks` permite
-analizar manualmente; de lo contrario se requiere un kernel Python 3 funcional.
-La interfaz del pipeline es `--phase`; `--stage` pertenece al grid de bajo nivel.
-Las opciones anteriores `--partitions-only` y `--with-proxy-curve` se sustituyen
-por las fases explícitas correspondientes.
+`--skip-notebooks` permite el análisis manual. El notebook acepta `STAGE=rq1`,
+`aggregation`, `expertise`, `support` o `controls`; exige respectivamente
+108/216/270/324/216 filas completas en los archivos de esos bloques. Exporta
+figuras y tablas en `minimal_analysis/<STAGE>/`. Los diagnósticos focales exportan
+sus propios efectos emparejados. El análisis gráfico supervisado/curva sigue
+pendiente; sus ejecuciones no autorizan a afirmar un N óptimo.
 
-Los bloques T=8 se guardan por separado: `results.csv` (RQ1),
-`results_aggregation.csv` y `results_support.csv`. El notebook usa `STAGE`
-para cargar únicamente los bloques necesarios: 324 filas en RQ1, 378 en
-agregación y 432 en soporte. Temperatura requiere además sus 36 filas nuevas.
-No se exige ORACLE-prob; sigue disponible como método del runner para un
-control opcional con un CSV independiente. No hay una fase automática para él.
-El análisis gráfico específico de supervisado/curva sigue pendiente.
-
-Se reutilizan caches completos y filas KD/CE por identidad. Los errores detienen
-la fase. Los teachers parciales no se borran ni se reanudan a mitad del modelo.
-El informe de reproducción debe corresponder al cache y receta actuales.
-El piloto puede repetirse tras RQ1: su auditoría selecciona sus tres brazos.
+Se conservan los CSV históricos v3 sin sobrescribirlos. El diseño nuevo usa los
+archivos indicados arriba; no importa automáticamente sus filas. Caches de
+teachers completos se reutilizan; las nuevas celdas se reanudan por identidad.
+El informe del piloto debe corresponder a ORACLE y al cache actual.
 
 KD base usa 30 épocas, proxy 10000 y batch 256: 1200 actualizaciones.
-CE y curva fijan 1200 actualizaciones explícitamente. Los subconjuntos de la
-curva son anidados y balanceados; N=100 usa batch efectivo 100. Por tanto el
-presupuesto se iguala por actualizaciones, no por ejemplos consumidos.
+CE y curva fijan 1200 explícitamente. Los subconjuntos son anidados y balanceados;
+N=100 usa batch efectivo 100. Se igualan actualizaciones, no ejemplos consumidos.
+El fallback común permanece FedDF-logit incluso en ORACLE-prob/EXPERT-prob/SR:
+el contraste ORACLE de operador no cambia las muestras con selección vacía.
 
 ### A. Crear y revisar solo particiones
 
@@ -248,13 +271,13 @@ Repetir para seeds 43/44 y los otros datasets antes del barrido. Las figuras no 
 
 ```bash
 python -m article1.runner teachers --dataset mnist --seed 42 --regime iid --partitions OUTPUTS/article1_v3/partitions/mnist-seed42-iid --output OUTPUTS/article1_v3/sources/mnist-seed42-iid --device cuda
-python -m article1.runner distill --dataset mnist --seed 42 --method expert_logit --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results.csv --device cuda
+python -m article1.runner distill --dataset mnist --seed 42 --method oracle_logit --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_selection.csv --device cuda
 ```
 
 Para planificar más celdas sin ejecutarlas:
 
 ```bash
-python run_article1_grid.py --stage distill --datasets mnist --regimes iid --seeds 42 --methods feddf_logit expert_logit oracle_logit --dry-run
+python run_article1_grid.py --stage distill --datasets mnist --regimes iid --seeds 42 --methods feddf_logit oracle_logit --dry-run
 ```
 
 No ejecutar el grid entero antes del control pequeño. Los outputs de teachers no vacíos se rechazan; un entrenamiento interrumpido se inspecciona antes de decidir cómo repetirlo. No hay sobrescritura automática de checkpoints ni resampling de particiones.
@@ -264,7 +287,7 @@ No ejecutar el grid entero antes del control pequeño. Los outputs de teachers n
 ```bash
 python -m article1.runner supervised --dataset mnist --seed 42 --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_supervised_proxy.csv --updates 1200 --device cuda
 python -m article1.runner supervised --dataset cifar --seed 42 --cache OUTPUTS/article1_v3/sources/cifar-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_proxy_size.csv --proxy-size 1000 --updates 1200 --device cuda
-python -m article1.runner distill --dataset cifar --seed 42 --cache OUTPUTS/article1_v3/sources/cifar-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_proxy_size.csv --method expert_logit --temperature 8 --proxy-size 1000 --updates 1200 --device cuda
+python -m article1.runner distill --dataset cifar --seed 42 --cache OUTPUTS/article1_v3/sources/cifar-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/results_proxy_size_expert_prob.csv --method expert_prob --temperature 8 --proxy-size 1000 --updates 1200 --device cuda
 ```
 
 N=1000 es ejemplo de sintaxis, no una orden para lanzar un barrido. Estos brazos rechazan una salida llamada `results.csv`. KD a temperaturas distintas de 8 debe ir también a un CSV separado; el lanzador lo exige.
@@ -275,11 +298,11 @@ N=1000 es ejemplo de sintaxis, no una orden para lanzar un barrido. Estos brazos
 python -m compileall -q article1 run_article1_grid.py
 python -m pytest -q
 python -m article1.conditions
-python -m article1.audit OUTPUTS/article1_v3/results.csv
+python -m article1.audit OUTPUTS/article1_v3/results_selection.csv
 jupyter notebook notebooks/article1_definitive_analysis.ipynb
 ```
 
-Conditions exige las 54 fuentes. El notebook definitivo exige los bloques completos de la fase seleccionada (324/378/432 filas T=8): no se presenta como ejecutable con resultados v3 aún ausentes. Para verificación completa de caches activar `VERIFY_CACHES`; comprobar CSV y huellas registradas no sustituye reconstruir los targets con las fuentes reales.
+Conditions exige las 54 fuentes. El notebook definitivo exige los bloques completos de la fase seleccionada (108/216/270/324 filas T=8): no se presenta como ejecutable con resultados v3 aún ausentes. Para verificación completa de caches activar `VERIFY_CACHES`; comprobar CSV y huellas registradas no sustituye reconstruir los targets con las fuentes reales.
 
 ## 9. Estado histórico y reinicio
 
@@ -316,3 +339,5 @@ La separación de expertise evita su reutilización para seleccionar el checkpoi
 Revisión del lanzador completo: 44 pruebas correctas, incluidos modo plan sin ejecución, parada antes de entrenamiento en `--partitions-only` y reutilización CE/KD únicamente por identidad. Se reconstruyeron sin errores las 36 condiciones de MNIST/Fashion-MNIST con etiquetas oficiales; mínimos locales de validation: 80 y 17 ejemplos respectivamente. Las 18 configuraciones CIFAR se comprobaron con una fixture de sus recuentos de clase (mínimo 12 en validation), no con los archivos de imágenes: la descarga completa no se terminó en este entorno. El lanzador exige la comprobación con etiquetas oficiales de los tres datasets antes de entrenar. Los tamaños pequeños indican poca precisión estadística, no un solapamiento ni un defecto del reparto.
 
 Validación de la unificación por fases: 52 pruebas correctas; compilación del código y celdas del notebook correcta; lint correcto en los archivos modificados. No se han ejecutado entrenamientos reales en esta revisión.
+
+Validación del diseño mínimo probabilístico: 57 pruebas correctas y 8 omitidas por ausencia de PyTorch/torchvision; lint y compilación correctos. Se comprobaron los planes de todas las fases sin entrenar. Los tests nuevos cubren FedDF-prob, soporte de masa diminuta/underflow, fallback, revisión de identidades SR y máscaras no binarias. No se han ejecutado entrenamientos reales ni medido equivalencia empírica entre operadores.

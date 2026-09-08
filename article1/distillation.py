@@ -13,6 +13,7 @@ import numpy as np
 
 METHODS = (
     "feddf_logit",
+    "feddf_prob",
     "confidence_logit",
     "consensus_logit",
     "energy_logit",
@@ -85,10 +86,10 @@ def _validate(
         raise ValueError("labels must be [N] and in the class range")
     if mask is None:
         return z, y, None
-    m = np.asarray(mask, dtype=np.uint8)
+    m = np.asarray(mask)
     if m.shape != z.shape[1:] or not np.isin(m, (0, 1)).all():
         raise ValueError("M must be binary [K,C]")
-    return z, y, m
+    return z, y, m.astype(np.uint8)
 
 
 def _teacher_softmax(values: np.ndarray) -> np.ndarray:
@@ -103,7 +104,7 @@ def _routing(
     """Return scalar teacher weights and a selection indicator before fallback."""
     n, k, _ = z.shape
     all_selected = np.ones((n, k), dtype=bool)
-    if method == "feddf_logit":
+    if method in {"feddf_logit", "feddf_prob"}:
         return np.full((n, k), 1.0 / k), all_selected, "uniform"
     if method == "confidence_logit":
         # T_weight=tau=1; this is deliberately not MSP/sum(MSP).
@@ -165,13 +166,14 @@ def build_target(
         teacher_p = softmax(z, temperature)
         if method == "expert_prob_sr":
             assert m is not None
-            masked = teacher_p * m[None, :, :]
-            retained = masked.sum(axis=2)
-            # Only selected values are used; selected teachers necessarily have
-            # a true-label support bit and thus strictly positive retained mass.
-            valid = retained > EPS
-            teacher_p = np.zeros_like(teacher_p)
-            teacher_p[valid] = masked[valid] / retained[valid, None]
+            # Normalize inside the support: no EPS cutoff and no loss of a
+            # selected teacher when its full-distribution support mass is tiny.
+            restricted = np.zeros_like(teacher_p)
+            for k in range(z.shape[1]):
+                support = m[k].astype(bool)
+                if support.any():
+                    restricted[:, k, support] = softmax(z[:, k, support], temperature)
+            teacher_p = restricted
         q = (weights[..., None] * teacher_p).sum(axis=1)
         aggregation = (
             "mean_probabilities"
@@ -189,6 +191,7 @@ def build_target(
     counts = selected.sum(axis=1)
     metrics: dict[str, float | int | str | None] = {
         "method": method,
+        "target_revision": 2 if method == "expert_prob_sr" else 1,
         "aggregation": aggregation,
         "weight_rule": weight_rule,
         "target_accuracy": float((q.argmax(axis=1) == y).mean()),
@@ -237,6 +240,8 @@ def metadata_identity(
         "proxy_hash": proxy_hash,
         "mask_hash": mask_hash,
     }
+    if method == "expert_prob_sr":
+        payload["target_revision"] = 2
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()[:16]

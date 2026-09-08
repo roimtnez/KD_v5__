@@ -318,6 +318,8 @@ def _audit_source(
         )
     creation_commit = artifact_commit(metadata)
     for row in arm_rows:
+        if row["method"] == "expert_prob_sr" and str(row.get("target_revision")) != "2":
+            _issue(issues, "obsolete_sr_target_revision", condition=condition)
         if row["cache_sha256"] != digest:
             _issue(
                 issues,

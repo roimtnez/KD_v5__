@@ -112,6 +112,11 @@ def load_results(out: Path, stage: str = "rq1") -> dict:
             "temperature" in frame and frame.temperature.eq(8).all(),
             f"Expected only T=8 in {filename}",
         )
+        if "expert_prob_sr" in methods:
+            require(
+                "target_revision" in frame and frame.target_revision.eq(2).all(),
+                "Support results require stable target revision 2",
+            )
         frames.append(frame)
     main = pd.concat(frames, ignore_index=True)
     conditions = pd.read_csv(out / "conditions.csv")
@@ -191,67 +196,31 @@ def load_results(out: Path, stage: str = "rq1") -> dict:
             ),
         },
     }
-    path = out / "results_rq2_temperature.csv"
-    if stage == "temperature":
-        extra = pd.read_csv(path)
-        require(
-            extra.dataset.eq("cifar").all()
-            and extra.regime.isin(["iid", "alpha0p1", "single"]).all()
-            and extra.method.isin(["expert_logit", "expert_prob"]).all()
-            and extra.temperature.isin([1.0, 4.0]).all(),
-            "Foreign rows in isolated temperature CSV",
-        )
-        combined = pd.concat([main, extra], ignore_index=True)
-        require(
-            not combined.duplicated(IDENTITY).any()
-            and not combined.run_id.duplicated().any(),
-            "Duplicate rows across temperature sources",
-        )
-        temp = combined[
-            combined.dataset.eq("cifar")
-            & combined.regime.isin(["iid", "alpha0p1", "single"])
-            & combined.method.isin(["expert_logit", "expert_prob"])
-            & combined.temperature.isin([1.0, 4.0, 8.0])
-        ].copy()
-        expected_temp = set(
-            product(
-                ["cifar"],
-                ["iid", "alpha0p1", "single"],
-                SEEDS,
-                ["expert_logit", "expert_prob"],
-                [1.0, 4.0, 8.0],
-            )
-        )
-        require(
-            len(temp) == 54 and set(map(tuple, temp[IDENTITY].values)) == expected_temp,
-            "Incomplete 54-run temperature comparison",
-        )
-        require(temp.updates.eq(1200).all(), "Unexpected temperature KD budget")
-        paired(temp, "expert_prob", "expert_logit", fields=CRN + ROUTING)
-        context["temperature"] = temp
     return context
 
 
 def comparisons(context: dict) -> dict[str, pd.DataFrame]:
     t8 = context["t8"]
-    result = {
-        "routing": paired(t8, "expert_logit", "feddf_logit"),
-        "oracle_gap": paired(t8, "oracle_logit", "expert_logit"),
-    }
-    for control in ["confidence_logit", "consensus_logit", "energy_logit"]:
-        result[control] = paired(t8, "expert_logit", control)
-    if t8.method.eq("expert_prob").any():
-        result["aggregation"] = paired(
-            t8, "expert_prob", "expert_logit", fields=CRN + ROUTING
+    result = {"selection_logit": paired(t8, "oracle_logit", "feddf_logit")}
+    available = set(t8.method)
+    if "feddf_prob" in available:
+        result["feddf_pooling"] = paired(
+            t8, "feddf_prob", "feddf_logit", fields=CRN + ROUTING
         )
-    if t8.method.eq("expert_prob_sr").any():
+        result["oracle_pooling"] = paired(
+            t8, "oracle_prob", "oracle_logit", fields=CRN + ROUTING
+        )
+        result["selection_prob"] = paired(t8, "oracle_prob", "feddf_prob")
+    if "expert_prob" in available:
+        result["expertise_gain"] = paired(t8, "expert_prob", "feddf_prob")
+        result["oracle_expertise_gap"] = paired(t8, "oracle_prob", "expert_prob")
+    if "expert_prob_sr" in available:
         result["support"] = paired(
             t8, "expert_prob_sr", "expert_prob", fields=CRN + ROUTING + [SUPPORT_MASS]
         )
-    if context["temperature"] is not None:
-        result["temperature"] = paired(
-            context["temperature"], "expert_prob", "expert_logit", fields=CRN + ROUTING
-        )
+    for control in ("consensus_logit", "energy_logit"):
+        if control in available:
+            result[control] = paired(t8, control, "feddf_logit")
     return result
 
 
@@ -400,3 +369,40 @@ def export(out: Path, tables: dict[str, pd.DataFrame], figures: dict) -> None:
                 dpi=180,
                 bbox_inches="tight",
             )
+
+
+def focal_comparisons(out: Path, temperatures=(8,)) -> pd.DataFrame:
+    from itertools import product
+
+    from article1.experiments import FOCAL_REGIMES
+
+    out = Path(out)
+    paths = [out / T8_BLOCKS["expertise"][0], out / "results_expert_logit_focal.csv"]
+    if set(temperatures) != {8}:
+        paths.append(out / "results_expert_temperature.csv")
+    frame = pd.concat([pd.read_csv(path) for path in paths], ignore_index=True)
+    require(
+        frame.protocol_version.eq(PROTOCOL_VERSION).all(), "Incompatible focal protocol"
+    )
+    frame = frame[
+        frame.dataset.eq("cifar")
+        & frame.regime.isin(FOCAL_REGIMES)
+        & frame.method.isin(["expert_logit", "expert_prob"])
+        & frame.temperature.isin(temperatures)
+    ]
+    expected = set(
+        product(
+            ["cifar"],
+            FOCAL_REGIMES,
+            SEEDS,
+            ["expert_logit", "expert_prob"],
+            temperatures,
+        )
+    )
+    require(
+        len(frame) == len(expected)
+        and set(map(tuple, frame[IDENTITY].values)) == expected,
+        "Incomplete focal EXPERT operator comparison",
+    )
+    require(frame.updates.eq(1200).all(), "Unexpected focal budget")
+    return paired(frame, "expert_prob", "expert_logit", fields=CRN + ROUTING)

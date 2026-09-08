@@ -16,7 +16,8 @@ from article1.experiments import ANALYSIS_BLOCKS, T8_BLOCKS
 
 
 @pytest.mark.parametrize(
-    "stage,count", [("rq1", 324), ("aggregation", 378), ("support", 432)]
+    "stage,count",
+    [("rq1", 108), ("aggregation", 216), ("expertise", 270), ("support", 324)],
 )
 def test_analysis_loads_only_complete_requested_blocks(tmp_path, stage, count):
     conditions = []
@@ -53,6 +54,7 @@ def test_analysis_loads_only_complete_requested_blocks(tmp_path, stage, count):
                 run_id=f"{condition['dataset']}-{condition['regime']}-{condition['seed']}-{method}",
             )
             row[SUPPORT_MASS] = 0.0
+            row["target_revision"] = 2 if method == "expert_prob_sr" else 1
             rows.append(row)
         pd.DataFrame(rows).to_csv(tmp_path / filename, index=False)
     # A partial later experiment must not prevent analysis of the selected phase.
@@ -60,7 +62,7 @@ def test_analysis_loads_only_complete_requested_blocks(tmp_path, stage, count):
     context = load_results(tmp_path, stage=stage)
     assert len(context["t8"]) == count
     effects = comparisons(context)
-    assert ("aggregation" in effects) == (stage != "rq1")
+    assert ("feddf_pooling" in effects) == (stage != "rq1")
     assert ("support" in effects) == (stage == "support")
     final_file = tmp_path / T8_BLOCKS[ANALYSIS_BLOCKS[stage][-1]][0]
     pd.read_csv(final_file).iloc[:-1].to_csv(final_file, index=False)

@@ -1,23 +1,19 @@
-"""Frozen scientific blocks; one CSV per question, no implicit nine-arm grid."""
+"""Minimal selection → pooling → expertise → support experiment."""
 
-RQ1_METHODS = (
-    "feddf_logit",
-    "expert_logit",
-    "oracle_logit",
-    "confidence_logit",
-    "consensus_logit",
-    "energy_logit",
-)
+RQ1_METHODS = ("feddf_logit", "oracle_logit")
 T8_BLOCKS = {
-    "rq1": ("results.csv", RQ1_METHODS),
-    "aggregation": ("results_aggregation.csv", ("expert_prob",)),
-    "support": ("results_support.csv", ("expert_prob_sr",)),
+    "rq1": ("results_selection.csv", RQ1_METHODS),
+    "aggregation": ("results_pooling.csv", ("feddf_prob", "oracle_prob")),
+    "expertise": ("results_expertise.csv", ("expert_prob",)),
+    "support": ("results_support_v2.csv", ("expert_prob_sr",)),
+    "controls": ("results_controls.csv", ("consensus_logit", "energy_logit")),
 }
 ANALYSIS_BLOCKS = {
     "rq1": ("rq1",),
     "aggregation": ("rq1", "aggregation"),
-    "temperature": ("rq1", "aggregation"),
-    "support": ("rq1", "aggregation", "support"),
+    "expertise": ("rq1", "aggregation", "expertise"),
+    "support": ("rq1", "aggregation", "expertise", "support"),
+    "controls": ("rq1", "controls"),
 }
 PHASES = (
     "partitions",
@@ -25,8 +21,14 @@ PHASES = (
     "teachers",
     "rq1",
     "aggregation",
-    "temperature",
+    "expertise",
     "support",
+)
+OPTIONAL_PHASES = (
+    "controls",
+    "expert-logit",
+    "temperature",
     "supervised",
     "proxy-curve",
 )
+FOCAL_REGIMES = ("iid", "alpha0p1", "single")
