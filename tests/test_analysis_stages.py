@@ -17,7 +17,13 @@ from article1.experiments import ANALYSIS_BLOCKS, T8_BLOCKS
 
 @pytest.mark.parametrize(
     "stage,count",
-    [("rq1", 108), ("aggregation", 216), ("expertise", 270), ("support", 324)],
+    [
+        ("rq1", 108),
+        ("aggregation", 216),
+        ("expertise", 270),
+        ("support", 324),
+        ("baseline", 540),
+    ],
 )
 def test_analysis_loads_only_complete_requested_blocks(tmp_path, stage, count):
     conditions = []
@@ -63,7 +69,34 @@ def test_analysis_loads_only_complete_requested_blocks(tmp_path, stage, count):
     assert len(context["t8"]) == count
     effects = comparisons(context)
     assert ("feddf_pooling" in effects) == (stage != "rq1")
-    assert ("support" in effects) == (stage == "support")
+    assert ("support" in effects) == (stage in {"support", "baseline"})
+    if stage == "baseline":
+        from article1.baseline_results import export_blocks
+
+        master = tmp_path / "results_baseline.csv"
+        before = master.read_bytes()
+        paths = export_blocks(tmp_path)
+        assert len(paths) == 6
+        assert export_blocks(tmp_path) == paths
+        assert master.read_bytes() == before
+        assert len(pd.read_csv(tmp_path / "results_expert_logit_focal.csv")) == 9
+        for block in ("rq1", "aggregation", "expertise", "support", "controls"):
+            load_results(tmp_path, stage=block)
+        # Existing conflicting destinations are not overwritten.
+        conflict = paths[0]
+        conflict.write_text("invalid\n")
+        with pytest.raises(ValueError, match="existing block differs"):
+            export_blocks(tmp_path)
+        assert conflict.read_text() == "invalid\n"
+        conflict.unlink()
+        export_blocks(tmp_path)
+        # Revision 1 on other methods is legitimate; SR revision 1 is not.
+        rows = pd.read_csv(master)
+        rows.loc[rows.method.eq("expert_prob_sr"), "target_revision"] = 1
+        rows.to_csv(master, index=False)
+        with pytest.raises(ValueError, match="stable target revision 2"):
+            load_results(tmp_path, stage="baseline")
+        master.write_bytes(before)
     final_file = tmp_path / T8_BLOCKS[ANALYSIS_BLOCKS[stage][-1]][0]
     pd.read_csv(final_file).iloc[:-1].to_csv(final_file, index=False)
     with pytest.raises(ValueError, match="Incomplete T=8 grid"):

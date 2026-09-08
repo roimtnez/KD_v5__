@@ -114,7 +114,10 @@ def load_results(out: Path, stage: str = "rq1") -> dict:
         )
         if "expert_prob_sr" in methods:
             require(
-                "target_revision" in frame and frame.target_revision.eq(2).all(),
+                "target_revision" in frame
+                and frame.loc[frame.method.eq("expert_prob_sr"), "target_revision"]
+                .eq(2)
+                .all(),
                 "Support results require stable target revision 2",
             )
         frames.append(frame)
@@ -218,7 +221,11 @@ def comparisons(context: dict) -> dict[str, pd.DataFrame]:
         result["support"] = paired(
             t8, "expert_prob_sr", "expert_prob", fields=CRN + ROUTING + [SUPPORT_MASS]
         )
-    for control in ("consensus_logit", "energy_logit"):
+    if {"expert_prob", "expert_logit"} <= available:
+        result["expert_pooling"] = paired(
+            t8, "expert_prob", "expert_logit", fields=CRN + ROUTING
+        )
+    for control in ("confidence_logit", "consensus_logit", "energy_logit"):
         if control in available:
             result[control] = paired(t8, control, "feddf_logit")
     return result
