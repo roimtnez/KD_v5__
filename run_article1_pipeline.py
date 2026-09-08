@@ -19,7 +19,13 @@ import numpy as np
 
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
 from article1.distillation import kd_config, metadata_identity
-from article1.experiments import FOCAL_REGIMES, OPTIONAL_PHASES, PHASES, T8_BLOCKS
+from article1.experiments import (
+    BASELINE_METHODS,
+    FOCAL_REGIMES,
+    OPTIONAL_PHASES,
+    PHASES,
+    T8_BLOCKS,
+)
 from article1.hashes import file_sha256
 from article1.partitioning import ROLES, load_partitions, make_partitions
 from run_article1_grid import cache_identity
@@ -340,7 +346,26 @@ def main():
     else:
         if args.execute:
             check_sources()
-        if phase in T8_BLOCKS:
+        if phase == "baseline":
+            # Keep this ordering explicit: full baseline runs are long, and
+            # probability-space methods must be executed before logit-space ones.
+            grid(
+                "--stage",
+                "distill",
+                "--methods",
+                *BASELINE_METHODS,
+                "--results",
+                OUT / "results_baseline.csv",
+            )
+            run(
+                "-m",
+                "article1.audit",
+                OUT / "results_baseline.csv",
+                "--methods",
+                *BASELINE_METHODS,
+            )
+            notebook(phase)
+        elif phase in T8_BLOCKS:
             if phase == "rq1":
                 if args.execute:
                     check_pilot()

@@ -1,5 +1,20 @@
 """Minimal selection → pooling → expertise → support experiment."""
 
+# A convenience full-grid phase.  Keep the probability operators first so a
+# long baseline run begins with the requested probability-space results.
+BASELINE_METHODS = (
+    "feddf_prob",
+    "expert_prob",
+    "expert_prob_sr",
+    "oracle_prob",
+    "feddf_logit",
+    "confidence_logit",
+    "consensus_logit",
+    "energy_logit",
+    "expert_logit",
+    "oracle_logit",
+)
+
 RQ1_METHODS = ("feddf_logit", "oracle_logit")
 T8_BLOCKS = {
     "rq1": ("results_selection.csv", RQ1_METHODS),
@@ -25,6 +40,7 @@ PHASES = (
     "support",
 )
 OPTIONAL_PHASES = (
+    "baseline",
     "controls",
     "expert-logit",
     "temperature",
