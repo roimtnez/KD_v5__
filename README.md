@@ -530,3 +530,67 @@ python -m article1.reproduce --dataset mnist --seed 42 --method expert_prob --ca
 ```
 
 No se han medido tiempos ni equivalencia CUDA en el MSI desde este entorno.
+
+## Análisis provisional sobre instantáneas independientes
+
+Desde un checkout independiente, con un Python que ya disponga de numpy, pandas,
+matplotlib, nbformat, nbclient e ipykernel, sin cambiar el entorno de entrenamiento:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 CUDA_VISIBLE_DEVICES='' \
+  nice -n 15 python run_article1_analysis.py \
+  --source-root /ruta/checkout-activo/OUTPUTS/article1_v3 \
+  --data-dir /ruta/checkout-activo/data \
+  --analysis-root /tmp/article1-analysis-output
+```
+
+El comando copia una versión coherente de cada CSV (runner usa `os.replace`),
+valida estructura y registra fecha, filas, SHA256 y ruta original. Copia caches y
+particiones verificando sus manifiestos y reintenta archivos inestables. No lee
+checkpoints como modelos: registra presencia y SHA256 de bytes. Los metadatos v3
+solo tienen hashes de estados, por lo que esta limitación queda explícita y no se
+presenta como verificación independiente de los estados de los teachers.
+
+Cada directorio `<analysis-root>/<snapshot_id>/` contiene `manifest.json`,
+`snapshots/`, `tables/`, `figures/`, `notebooks/` ejecutados y `report.md`.
+Los notebooks `article1_progress_analysis.ipynb`,
+`article1_expertise_diagnostics.ipynb` y `article1_proxy_budget_analysis.ipynb`
+usan `ARTICLE1_SNAPSHOT` para leer exclusivamente esa copia. Para abrirlos de forma
+interactiva, exportar dicha variable con la ruta absoluta de la instantánea.
+Los resultados ausentes se inventarían como pendientes; las figuras dependientes
+se aplazan. No se cambian máscaras ni reglas por soporte escaso.
+
+El análisis provisional conserva los diez métodos y las 54 condiciones, aunque
+el checkout activo haya reducido sus métodos por un cambio local. Antes de figuras
+muestra presencia/ausencia/invalidez por identidad. Los contrastes conservan solo
+pares completos con CRN compatible y publican exclusiones, seeds, media y SD
+muestral. No promedia clientes como réplicas. Las métricas vacías legítimas (p. ej.
+masa fuera de soporte para controles) se conservan, nunca se rellenan con ceros.
+
+### Cuando estén las 540 filas
+
+1. Crear una nueva instantánea; auditar CSV, caches, particiones y procedencia.
+   Resolver cualquier duplicado, conflicto, SR anterior a revisión 2 o CRN distinto.
+   La auditoría de estados de checkpoint tiene la limitación indicada arriba.
+2. En un directorio de trabajo limpio, copiar **de la instantánea** únicamente
+   `results_baseline.csv` y `conditions.csv`. Nunca usar un CSV activo o incompleto.
+3. Ejecutar `python -m article1.baseline_results --output-root /ruta/copia-completa`.
+   Conserva la exigencia de 540 identidades y exporta `results_selection.csv`,
+   `results_pooling.csv`, `results_expertise.csv`, `results_support_v2.csv`,
+   `results_controls.csv` y `results_expert_logit_focal.csv`. El exportador rechaza
+   bloques existentes discrepantes; no usar como destino el bloque piloto.
+4. Ejecutar `article1_definitive_analysis.ipynb` con `OUT` apuntando a esa copia y
+   `STAGE="baseline"`. La exigencia de cuadrícula completa permanece intacta.
+
+Antes de lanzar fases previstas, `supervised` audita el bloque selection y
+`proxy-curve` audita el bloque expertise. Preparar los bloques exportados completos
+mediante el procedimiento anterior; no relanzar expertise para recrear KD existente.
+Este análisis no lanza fases ni modifica colas. La curva lee CE y EXPERT-prob del
+mismo `results_proxy_size_expert_prob.csv`; no usa `results_proxy_size.csv`.
+CE N=10000 se reutiliza de supervisado y KD N=10000 de baseline/expertise, con
+rechazo de copias discrepantes. CE no exige máscara ni cache privado iguales a KD;
+sí proxy, etiquetas, inicialización, batches, optimizador y 1200 updates compatibles.
+CE reutilizado entre regímenes no agrega réplicas. Subconjuntos anidados se verifican
+con `article1.proxy.proxy_positions`. Un cruce solo se acota entre N evaluados.
+
+Pruebas: `python -m pytest -q tests/test_progress.py`.
