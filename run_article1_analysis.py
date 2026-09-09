@@ -24,7 +24,7 @@ if __name__=='__main__':
     if args.snapshot:
         import json, subprocess
         manifest=json.loads((out/'manifest.json').read_text())
-        manifest['snapshot_preparation_commit']=manifest['analysis_commit']
+        manifest.setdefault('snapshot_preparation_commit', manifest['analysis_commit'])
         manifest['analysis_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
         manifest['analysis_dirty']=subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()
         (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

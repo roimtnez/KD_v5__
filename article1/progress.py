@@ -6,9 +6,7 @@ from pathlib import Path
 from itertools import product
 from datetime import datetime, timezone
 import csv
-import io
 import json
-import os
 import shutil
 import subprocess
 import hashlib
@@ -18,10 +16,10 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from article1 import DATASETS, REGIMES, SEEDS, THRESHOLDS
-from article1.experiments import BASELINE_METHODS
+from article1.experiments import BASELINE_METHODS as CONFIGURED_BASELINE_METHODS
 from article1.hashes import file_sha256, array_sha256
 from article1.partitioning import load_partitions
-from article1.distillation import authority_from_expertise, metadata_identity
+from article1.distillation import METHODS, authority_from_expertise, metadata_identity
 from article1.analysis import KEY, METRICS, ROUTING, summarize
 from article1.proxy import proxy_positions
 
@@ -34,6 +32,11 @@ CONTRASTS = [('oracle_logit','feddf_logit'),('feddf_prob','feddf_logit'),
  ('expert_prob_sr','expert_prob'),('expert_prob','expert_logit'),
  ('confidence_logit','feddf_logit'),('consensus_logit','feddf_logit'),('energy_logit','feddf_logit')]
 CE = 'supervised_proxy_ce'
+# Scientific inventory is independent of the methods chosen by an active queue.
+BASELINE_METHODS = tuple(METHODS)
+RESULT_FILES = ('results_baseline.csv', 'results_rq2_backup.csv',
+                'results_supervised_proxy.csv', 'results_proxy_size_expert_prob.csv',
+                'results_expertise.csv', 'results_selection.csv')
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -59,7 +62,9 @@ def stable_copy(source, destination, manifest, retries=3):
                     reader = csv.reader(f, strict=True)
                     header = next(reader)
                     rows = list(reader)
-                require(len(header) == len(set(header)) and all(len(r)==len(header) for r in rows), 'Malformed CSV')
+                if len(header) != len(set(header)) or not all(len(r)==len(header) for r in rows):
+                    destination.unlink(missing_ok=True)
+                    raise ValueError('Malformed CSV')
                 record['rows'] = len(rows)
             manifest['inputs'].append(record)
             return destination
@@ -72,9 +77,9 @@ def read_csv(path):
     except pd.errors.EmptyDataError:
         return pd.DataFrame()
 
-def inventory(frame):
+def inventory(frame, methods=BASELINE_METHODS):
     records = []
-    for d,r,s,m in product(DATASETS,REGIMES,SEEDS,BASELINE_METHODS):
+    for d,r,s,m in product(DATASETS,REGIMES,SEEDS,methods):
         rows = frame if frame.empty else frame[(frame.dataset==d)&(frame.regime==r)&(frame.seed==s)&(frame.method==m)]
         status = 'pending' if len(rows)==0 else ('invalid' if len(rows)!=1 or not rows.get('valid',pd.Series(True,index=rows.index)).all() else 'present')
         records.append(dict(dataset=d,regime=r,seed=s,method=m,status=status,rows=len(rows)))
@@ -83,8 +88,13 @@ def inventory(frame):
 def compatible_pairs(frame, left, right, fields=KD, keys=KEY, metrics=METRICS):
     output, excluded = [], []
     subset = frame[frame.method.isin([left,right])] if not frame.empty else frame
+    if keys == KEY:
+        observed = set(map(tuple, subset[KEY].to_numpy())) if not subset.empty else set()
+        for identity in product(DATASETS, REGIMES, SEEDS):
+            if identity not in observed:
+                excluded.append(dict(zip(KEY, identity), left=left, right=right, reason='both_methods_absent'))
     if subset.empty:
-        return pd.DataFrame(), pd.DataFrame([dict(reason='both_methods_absent',left=left,right=right)])
+        return pd.DataFrame(), pd.DataFrame(excluded or [dict(reason='both_methods_absent',left=left,right=right)])
     for identity, group in subset.groupby(keys,dropna=False):
         a,b = group[group.method==left],group[group.method==right]
         reason = ''
@@ -111,6 +121,7 @@ def compatible_pairs(frame, left, right, fields=KD, keys=KEY, metrics=METRICS):
 
 def deduplicate_files(frames):
     """Only identical executions across different files may be reused."""
+    frames = [frame for frame in frames if not frame.empty]
     if not frames: return pd.DataFrame()
     for frame in frames:
         require(not frame.run_id.duplicated().any(), 'Duplicate run_id within file')
@@ -119,7 +130,11 @@ def deduplicate_files(frames):
         if len(rows)>1:
             require(len(rows.drop(columns=['input_file'],errors='ignore').fillna('<NA>').drop_duplicates())==1,
                     'Conflicting duplicate execution across files')
-    return combined.drop_duplicates('run_id').copy()
+    appearances = combined.groupby('run_id').input_file.agg(lambda values: '|'.join(sorted(set(values)))) if 'input_file' in combined else None
+    result = combined.drop_duplicates('run_id').copy()
+    if appearances is not None:
+        result['input_file'] = result.run_id.map(appearances)
+    return result
 
 def save_table(out,name,frame):
     frame.to_csv(out/'tables'/f'{name}.csv',index=False)
@@ -141,7 +156,10 @@ def effect_plot(out,name,frame,column, x='regime'):
             ax.plot(pos,g[column].mean(),'k_')
             if len(g)>1: ax.errorbar(pos,g[column].mean(),yerr=g[column].std(ddof=1),color='black',capsize=3)
         ax.axhline(0,color='grey',lw=.5)
-        ax.set(title=d+' · provisional; n variable',xticks=range(len(categories)),xticklabels=categories,ylabel=column)
+        counts = rows.groupby(x).seed.nunique() if not rows.empty else pd.Series(dtype=int)
+        ticklabels = [f'{value}\nn={int(counts.get(value, 0))}' for value in categories]
+        state = 'completo (3 seeds)' if all(counts.get(value, 0) == 3 for value in categories) else 'parcial'
+        ax.set(title=d+' · '+state,xticks=range(len(categories)),xticklabels=ticklabels,ylabel=column)
         ax.tick_params(axis='x',rotation=30)
         if len(rows): ax.legend(title='seed')
     save_figure(out,name,fig)
@@ -176,6 +194,7 @@ def sources(original,out,manifest,data_dir):
         except (OSError,ValueError) as e: manifest['issues'].append(dict(kind='labels_pending',dataset=d,reason=str(e)))
     for d,r,s in product(DATASETS,REGIMES,SEEDS):
         name=f'{d}-seed{s}-{r}'; ident=dict(dataset=d,regime=r,seed=s)
+        lengths = [len(rows) for rows in (cells, selection, coverage, subsets)]
         try:
             src=original/'sources'/name; part=original/'partitions'/name
             dst=out/'snapshots'/'sources'/name; pdst=out/'snapshots'/'partitions'/name
@@ -223,9 +242,11 @@ def sources(original,out,manifest,data_dir):
             for size in (100,500,1000,5000,10000):
                 positions=proxy_positions(idx,y,size,s)
                 require(previous<=set(idx[positions]),'Non-nested subsets'); previous=set(idx[positions])
-                subsets.append(dict(**ident,proxy_size=size,proxy_sha256=array_sha256(idx[positions]),proxy_labels_sha256=array_sha256(y[positions]),proxy_master_sha256=array_sha256(idx)))
+                subsets.append(dict(**ident,proxy_size=size,proxy_sha256=array_sha256(idx[positions]),proxy_labels_sha256=array_sha256(y[positions]),proxy_master_sha256=array_sha256(idx),fallback_count=int((pc[y[positions]]==0).sum()),mean_selected_teachers=float(pc[y[positions]].mean())))
             states.append(dict(**ident,status='present',checkpoint_state_verification='unavailable: metadata stores state hashes, not file hashes'))
         except (OSError,ValueError,KeyError) as e:
+            for rows, length in zip((cells, selection, coverage, subsets), lengths):
+                del rows[length:]
             states.append(dict(**ident,status='invalid_or_pending',reason=str(e)))
     for name,rows in [('expertise_cells',cells),('selection_records',selection),('coverage',coverage),('source_inventory',states),('proxy_subsets',subsets)]: save_table(out,name,pd.DataFrame(rows))
     manifest['source_inventory']=states
@@ -238,6 +259,8 @@ def validate_rows(frame,coverage,subsets,baseline=True):
     for i,row in frame.iterrows():
         reasons=[]
         if duplicate.loc[i]: reasons.append('duplicate_identity')
+        if row.dataset not in DATASETS or row.seed not in SEEDS or (row.method != CE and row.regime not in REGIMES):
+            reasons.append('unexpected_condition')
         if row.get('protocol_version')!='article1-v3': reasons.append('protocol')
         if row.get('updates')!=1200: reasons.append('budget')
         if row.method=='expert_prob_sr' and row.get('target_revision')!=2: reasons.append('old_SR')
@@ -248,6 +271,12 @@ def validate_rows(frame,coverage,subsets,baseline=True):
         for f in ['student_test_accuracy','student_test_nll']+(METRICS+ROUTING if row.method!=CE else []):
             try: require(np.isfinite(float(row[f])),'nonfinite')
             except (ValueError,KeyError,TypeError): reasons.append('nonfinite_'+f)
+        for f in ['student_test_accuracy'] + (['target_accuracy','fallback_rate'] if row.method != CE else []):
+            if not 0 <= row.get(f, float('nan')) <= 1: reasons.append('range_'+f)
+        for f in ['student_test_nll'] + (['target_nll','target_entropy'] if row.method != CE else []):
+            if not row.get(f, float('nan')) >= 0: reasons.append('range_'+f)
+        if row.method != CE and row.get('temperature') != 8: reasons.append('temperature')
+        if row.get('batch_size') != min(256, row.proxy_size): reasons.append('effective_batch_size')
         if baseline and (row.method not in BASELINE_METHODS or row.get('temperature')!=8 or row.get('proxy_size')!=10000): reasons.append('unexpected_baseline_identity')
         if row.method!=CE:
             cov=coverage[(coverage.dataset==row.dataset)&(coverage.regime==row.regime)&(coverage.seed==row.seed)] if not coverage.empty else coverage
@@ -262,34 +291,62 @@ def validate_rows(frame,coverage,subsets,baseline=True):
                 expected=metadata_identity(method=row.method,temperature=float(row.temperature),config=json.loads(row.training_recipe_json),source_hash=row.cache_sha256,proxy_hash=row.proxy_sha256,mask_hash=row.M_sha256)
                 if expected!=row.run_id: reasons.append('run_id_mismatch')
             except (ValueError,TypeError): reasons.append('invalid_recipe')
+        else:
+            try:
+                recipe = json.loads(row.training_recipe_json)
+                payload = dict(dataset=row.dataset, seed=int(row.seed), method=CE,
+                               proxy_sha256=row.proxy_sha256, recipe=recipe)
+                expected = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                if expected != row.run_id: reasons.append('run_id_mismatch')
+            except (ValueError, TypeError): reasons.append('invalid_recipe')
         regime='iid' if row.method==CE else row.regime
         sub=subsets[(subsets.dataset==row.dataset)&(subsets.regime==regime)&(subsets.seed==row.seed)&(subsets.proxy_size==row.proxy_size)] if not subsets.empty else subsets
         if len(sub)!=1: reasons.append('proxy_unverified')
         else:
             for f in ['proxy_sha256','proxy_labels_sha256','proxy_master_sha256']:
                 if row.get(f)!=sub.iloc[0][f]: reasons.append(f+'_mismatch')
+            if str(row.method).startswith('expert'):
+                for f in ['fallback_count','mean_selected_teachers']:
+                    if f in sub and not np.isclose(row.get(f, float('nan')),sub.iloc[0][f]): reasons.append(f+'_mismatch')
+        if row.method != CE and not np.isclose(row.get('fallback_count',float('nan')),row.proxy_size*row.get('fallback_rate',float('nan'))):
+            reasons.append('fallback_count_rate_mismatch')
         errors.append(';'.join(sorted(set(reasons))))
     frame['invalid_reason']=errors; frame['valid']=frame.invalid_reason.eq('')
     return frame
 
 def prepare(original,analysis_root,data_dir):
     original=Path(original).resolve(); out=Path(analysis_root).resolve()/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    require(not out.is_relative_to(original.parent.parent),'Analysis must be outside active checkout')
+    require(not out.is_relative_to(original), 'Analysis outputs must be outside original results directory')
+    require(not out.is_relative_to(Path(data_dir).resolve()), 'Analysis outputs must be outside original data directory')
     for directory in ('snapshots','tables','figures'): (out/directory).mkdir(parents=True,exist_ok=False)
     root=Path(__file__).resolve().parents[1]
     git=lambda *args: subprocess.check_output(['git',*args],cwd=root,text=True).strip()
-    manifest=dict(snapshot_date=now(),analysis_commit=git('rev-parse','HEAD'),analysis_dirty=git('status','--porcelain'),original_root=str(original),inputs=[],issues=[],expected_baseline_rows=540)
-    for f in ['results_baseline.csv','conditions.csv','results_supervised_proxy.csv','results_proxy_size_expert_prob.csv','results_expertise.csv','results_selection.csv']:
+    manifest=dict(snapshot_date=now(),analysis_commit=git('rev-parse','HEAD'),analysis_dirty=git('status','--porcelain'),original_root=str(original),inputs=[],issues=[],expected_baseline_rows=540, configured_baseline_methods=list(CONFIGURED_BASELINE_METHODS), expected_configured_rows=54*len(CONFIGURED_BASELINE_METHODS))
+    for f in (*RESULT_FILES, 'conditions.csv'):
         try: stable_copy(original/f,out/'snapshots'/f,manifest)
-        except (OSError,ValueError) as e: manifest['issues'].append(dict(kind='input_pending',path=str(original/f),reason=str(e)))
-    for f in ('article1/experiments.py','run_article1_pipeline.py'):
+        except (OSError,ValueError) as e:
+            (out/'snapshots'/f).unlink(missing_ok=True)
+            manifest['issues'].append(dict(kind='input_pending' if isinstance(e, FileNotFoundError) else 'input_invalid',path=str(original/f),reason=str(e)))
+    for f in ('article1/experiments.py','run_article1_pipeline.py','article1/runner.py'):
         stable_copy(original.parent.parent/f,out/'snapshots'/'active_code'/f,manifest)
     manifest['active_checkout_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=original.parent.parent,text=True).strip()
     manifest['active_checkout_diff']=subprocess.check_output(['git','diff','--','article1/experiments.py'],cwd=original.parent.parent,text=True)
+    for f in ('article1/progress.py', 'article1/analysis.py', 'run_article1_analysis.py',
+              'notebooks/article1_progress_analysis.ipynb', 'notebooks/article1_expertise_diagnostics.ipynb',
+              'notebooks/article1_proxy_budget_analysis.ipynb'):
+        stable_copy(root/f, out/'snapshots'/'analysis_code'/f, manifest)
     coverage,subsets=sources(original,out,manifest,Path(data_dir))
     path=out/'snapshots'/'results_baseline.csv'
-    frame=validate_rows(read_csv(path) if path.exists() else pd.DataFrame(),coverage,subsets)
+    primary=validate_rows(read_csv(path) if path.exists() else pd.DataFrame(),coverage,subsets)
+    save_table(out,'configured_baseline_validated',primary)
+    configured=inventory(primary, methods=CONFIGURED_BASELINE_METHODS)
+    save_table(out,'configured_completeness',configured)
+    frames=[read_csv(out/'snapshots'/f).assign(input_file=f) for f in ('results_baseline.csv','results_rq2_backup.csv') if (out/'snapshots'/f).exists()]
+    frame=validate_rows(deduplicate_files(frames),coverage,subsets)
     save_table(out,'baseline_validated',frame); inv=inventory(frame); save_table(out,'completeness',inv)
+    manifest['configured_completeness']=configured.to_dict('records')
+    manifest['configured_baseline_complete']=bool(configured.status.eq('present').all())
+    manifest['full_grid_complete']=bool(inv.status.eq('present').all())
     manifest['completeness']=inv.to_dict('records')
     manifest['artifact_commits']=sorted(coverage.artifact_creation_commit.unique()) if not coverage.empty else []
     manifest['kd_execution_commits']=sorted(frame.kd_execution_commit.dropna().unique()) if not frame.empty else []
@@ -301,8 +358,64 @@ def prepare(original,analysis_root,data_dir):
 def completeness(out):
     table=read_csv(Path(out)/'tables'/'completeness.csv')
     matrix=table.pivot(index=KEY,columns='method',values='status')
+    print('Cuadrícula científica original: diez métodos (540 identidades).')
     print(matrix.to_string())
+    configured = read_csv(Path(out)/'tables'/'configured_completeness.csv') if (Path(out)/'tables'/'configured_completeness.csv').exists() else table
+    print('Baseline configurado, por dataset y estado:')
+    print(configured.groupby(['dataset','status']).size().to_string())
     return matrix
+
+def export_ready_blocks(out, frame):
+    """Export individually complete blocks to analysis storage, never the live queue.
+
+    This is not the full-grid baseline exporter. Incomplete blocks are enumerated
+    and left pending; no zero-row control files are manufactured.
+    """
+    from article1.experiments import T8_BLOCKS, FOCAL_REGIMES
+    directory = out/'exports'
+    directory.mkdir(exist_ok=True)
+    raw_frames = [pd.read_csv(out/'snapshots'/name, dtype=str, keep_default_na=False)
+                  .assign(input_file=name) for name in ('results_baseline.csv','results_rq2_backup.csv')
+                  if (out/'snapshots'/name).exists()]
+    raw = deduplicate_files(raw_frames).drop(columns='input_file', errors='ignore')
+    statuses = []
+    blocks = [(filename, methods, DATASETS, REGIMES) for name, (filename, methods)
+              in T8_BLOCKS.items() if name != 'baseline']
+    blocks.append(('results_expert_logit_focal.csv', ('expert_logit',), ('cifar',), FOCAL_REGIMES))
+    for filename, methods, datasets, regimes in blocks:
+        inv = inventory(frame, methods=methods)
+        inv = inv[inv.dataset.isin(datasets) & inv.regime.isin(regimes)]
+        ready = bool(inv.status.eq('present').all())
+        status = dict(filename=filename, expected=len(inv), present=int(inv.status.eq('present').sum()),
+                      status='ready' if ready else 'pending')
+        if ready:
+            rows = raw[raw.method.isin(methods) & raw.dataset.isin(datasets) & raw.regime.isin(regimes)]
+            path = directory/filename
+            payload = rows.to_csv(index=False)
+            if path.exists():
+                require(path.read_text() == payload, f'Conflicting derived block: {path}')
+            else:
+                path.write_text(payload)
+            status.update(path=str(path.resolve()), sha256=file_sha256(path))
+        statuses.append(status)
+    table = pd.DataFrame(statuses)
+    save_table(out, 'exported_blocks', table)
+    return statuses
+
+def pipeline_dependencies(out):
+    """Status at snapshot time, not a claim about process liveness."""
+    coverage, subsets = read_csv(out/'tables'/'coverage.csv'), read_csv(out/'tables'/'proxy_subsets.csv')
+    records = []
+    for phase, filename, methods in [('supervised','results_selection.csv',('feddf_logit','oracle_logit')),
+                                      ('proxy-curve','results_expertise.csv',('expert_prob',))]:
+        path = out/'snapshots'/filename
+        rows = validate_rows(read_csv(path), coverage, subsets) if path.exists() else pd.DataFrame()
+        inv = inventory(rows, methods=methods)
+        records.append(dict(phase=phase, filename=filename, expected=len(inv),
+                            present=int(inv.status.eq('present').sum()),
+                            status='ready' if inv.status.eq('present').all() else 'pending_or_invalid'))
+    save_table(out,'pipeline_dependencies',pd.DataFrame(records))
+    return records
 
 def progress(out):
     out=Path(out); completeness(out)
@@ -310,6 +423,8 @@ def progress(out):
     if (out/'snapshots'/'conditions.csv').exists():
         audit_conditions(out)
     manifest=json.loads((out/'manifest.json').read_text()); manifest['pairs']={}
+    manifest['exported_blocks'] = export_ready_blocks(out, frame)
+    manifest['pipeline_dependencies'] = pipeline_dependencies(out)
     all_summaries=[]
     for a,b in CONTRASTS:
         name=a+'__minus__'+b
@@ -318,7 +433,7 @@ def progress(out):
             fields=KD+ROUTING
         pairs,excluded=compatible_pairs(frame,a,b,fields=fields)
         save_table(out,name+'_paired',pairs); save_table(out,name+'_excluded',excluded)
-        manifest['pairs'][name]=dict(complete=len(pairs),excluded=len(excluded),seeds=sorted(pairs.seed.unique().tolist()) if not pairs.empty else [])
+        manifest['pairs'][name]=dict(expected=54,complete=len(pairs),excluded=len(excluded),seeds=sorted(pairs.seed.unique().tolist()) if not pairs.empty else [])
         if pairs.empty: continue
         for metric in METRICS:
             summary=summarize(pairs,column='delta_'+metric)
@@ -355,7 +470,7 @@ def expertise(out):
             cmap=plt.get_cmap('viridis').copy(); cmap.set_bad('#dddddd')
             im=ax.imshow(values,cmap=cmap,vmin=0,vmax=1 if column!='expertise_count' else None)
             ax.set(title=column,xlabel='Clase',ylabel='Cliente',xticks=range(10),yticks=range(10)); fig.colorbar(im,ax=ax)
-        fig.suptitle(str(ident)+' · gris: sin evidencia; cero observado: color mínimo')
+        fig.suptitle(' · '.join(map(str,ident))+' · gris: sin evidencia; cero observado: color mínimo')
         save_figure(out,'expertise_'+'_'.join(map(str,ident)),fig)
     return read_csv(out/'tables'/'coverage.csv')
 
@@ -375,6 +490,16 @@ def proxy_budget(out):
         rows.append(dict(dataset=d,regime=r,seed=s,method=m,proxy_size=n,status='pending' if len(g)==0 else 'present' if len(g)==1 and g.valid.all() else 'invalid'))
     inv=pd.DataFrame(rows); save_table(out,'proxy_budget_completeness',inv); print(inv.to_string(index=False))
     save_table(out,'proxy_budget_validated',combined)
+    if not combined.empty:
+        ce = combined[combined.method.eq(CE) & combined.valid].copy()
+        save_table(out, 'supervised_observations', ce)
+        summaries = []
+        for metric in METRICS[:2]:
+            summary = summarize(ce, metric, groups=['dataset','proxy_size'])
+            summary['metric'] = metric
+            summary['seeds'] = summary.apply(lambda row: ','.join(map(str, sorted(ce[(ce.dataset==row.dataset)&(ce.proxy_size==row.proxy_size)].seed))), axis=1) if not summary.empty else pd.Series(dtype=str)
+            summaries.append(summary)
+        save_table(out, 'supervised_summary', pd.concat(summaries, ignore_index=True))
     for r in ['iid','alpha0p1','single']:
         if combined.empty: continue
         subset=combined[(combined.dataset=='cifar')&((combined.method==CE)|(combined.regime==r))].copy()
@@ -395,15 +520,51 @@ def proxy_budget(out):
     return inv
 
 def report(out):
-    out=Path(out); m=json.loads((out/'manifest.json').read_text()); inv=read_csv(out/'tables'/'completeness.csv')
-    counts=inv.groupby(['dataset','status']).size().to_string()
-    text=f'''# Artículo 1: instantánea provisional\n\nFecha UTC: {m['snapshot_date']}. Código de análisis: {m['analysis_commit']}.\n\n## Observado\n\n```\n{counts}\n```\n\nFuentes de cache: {len([s for s in m['source_inventory'] if s['status']=='present'])}/54 verificadas por cache, particiones y regla M.\nProcedencia declarada de caches: {m['artifact_commits']}. KD: {m['kd_execution_commits']}.\nEl checkout activo tiene cambios locales en BASELINE_METHODS (seis métodos); no puede atribuirse esa configuración al proceso ya iniciado. No se ha modificado.\n\n## Interpretación\n\nContrastes y seeds exactos en contrast_summary.csv y tablas paired/excluded. Media y SD muestral por condición; SD con una seed queda indefinida. Coberturas diferentes no constituyen comparaciones entre regímenes. Clientes no son réplicas.\nValidation selecciona checkpoint; expertise construye M. No hay test local independiente v3. Accuracy de celdas acreditadas no valida generalización independiente ni rechazo OOD. Sin curvas por época: solo selection_records.\nNo se infiere equivalencia de ausencia de significación, superioridad universal de probabilidades ni pérdida causal de dark knowledge. No se seleccionaron variantes, temperaturas o thresholds con test.\n\n## Pendiente y limitaciones\n\n{m['checkpoint_limitation']}\nNo se cargaron checkpoints ni se hizo inferencia. Fuentes aceptadas para diagnósticos del cache, no como auditoría independiente de los estados serializados.\nCSV supervisado y curva ausentes se enumeran en manifest.json y proxy_budget_completeness.csv. CE se reutiliza entre regímenes sin nuevas réplicas. Un cruce queda acotado entre N evaluados; no define óptimo. 1200 actualizaciones no igualan ejemplos consumidos.\nNo se ejecutó exportador baseline ni análisis definitivo sobre la cuadrícula incompleta. No se lanzó ninguna fase.\nproxy-curve exige results_expertise.csv completo; supervised exige results_selection.csv completo. Exportar bloques de una copia baseline de 540 filas validada antes de preparar esas fases; no relanzar expertise. El bloque selection existente puede ser solo el piloto y entrar en conflicto: usar directorio de exportación limpio.\n'''
-    summary_path=out/'tables'/'contrast_summary.csv'
-    if summary_path.exists():
-        summary=read_csv(summary_path)
-        observed=summary[summary.metric.eq('student_test_accuracy') & summary.contrast.eq('expert_prob__minus__feddf_prob') & summary.regime.isin(['iid','single'])]
-        text+='\nLa tabla breve muestra los extremos categóricos IID/Single del contraste principal; todos los regímenes, contrastes y NLL están en contrast_summary.csv. No implica orden causal ni superioridad universal.\n'
-        text+='\n## Diferencias observadas de accuracy (fracción; SD muestral)\n\n```\n'+observed.to_string(index=False)+'\n```\n'
+    """Describe this snapshot; never bake a previous run's status into the report."""
+    out = Path(out)
+    manifest = json.loads((out/'manifest.json').read_text())
+    full = read_csv(out/'tables'/'completeness.csv')
+    primary = read_csv(out/'tables'/'configured_completeness.csv')
+    proxy = read_csv(out/'tables'/'proxy_budget_completeness.csv')
+    blocks = read_csv(out/'tables'/'exported_blocks.csv')
+    dependencies = read_csv(out/'tables'/'pipeline_dependencies.csv')
+    def table(frame):
+        return '\n```\n' + frame.to_string(index=False) + '\n```\n'
+    def counts(frame):
+        return frame.groupby(['dataset','status']).size().rename('identidades').reset_index()
+    text = '# Artículo 1: actualización sobre instantánea\n\n'
+    text += f"Fecha UTC: {manifest['snapshot_date']}. Commit del análisis: `{manifest['analysis_commit']}`.\n"
+    text += f"Checkout de origen: `{manifest['active_checkout_commit']}`. Cada entrada tiene ruta, SHA256 y fecha en manifest.json.\n\n"
+    text += '## Observado\n\n'
+    text += f"Baseline configurado ({len(manifest['configured_baseline_methods'])} métodos, {manifest['expected_configured_rows']} identidades esperadas):"
+    text += table(counts(primary))
+    text += 'Cuadrícula científica original (10 métodos, 540 identidades), incorporando el respaldo RQ2 tras verificar identidad, caches y CRN:'
+    text += table(counts(full))
+    text += f"Fuentes verificadas por cache, particiones y regla M: {sum(row['status']=='present' for row in manifest['source_inventory'])}/54.\n"
+    text += f"Commits declarados de caches: {manifest['artifact_commits']}. De KD: {manifest['kd_execution_commits']}. No se atribuye al proceso activo el commit actual por su mera presencia en disco.\n\n"
+    text += 'Supervisado y curva, sin multiplicar CE por régimen:' + table(counts(proxy))
+    text += 'Bloques completos preparados exclusivamente en `exports/` de esta instantánea:'
+    text += table(blocks[['filename','expected','present','status']])
+    text += 'Dependencias del pipeline observadas en los archivos originales al tomar la instantánea:' + table(dependencies)
+    text += '\nNo se inició ninguna fase ni se modificaron CSV, caches, checkpoints, particiones o colas originales. '
+    text += 'La ausencia de un archivo no permite afirmar si un proceso sigue vivo. Los bloques preparados no se instalaron en la cola activa.\n'
+    summary = read_csv(out/'tables'/'contrast_summary.csv')
+    if not summary.empty:
+        brief = summary[summary.metric.eq('student_test_accuracy') & summary.contrast.eq('expert_prob__minus__feddf_prob') & summary.regime.isin(['iid','single'])]
+        brief = brief.copy()
+        brief['mean_pp'], brief['sd_pp'] = 100*brief['mean'], 100*brief['sd']
+        text += '\n## Interpretación\n\nEXPERT-prob − FedDF-prob, extremos categóricos IID y Single (puntos porcentuales; SD muestral). Todos los regímenes, NLL y contrastes se conservan en `tables/contrast_summary.csv`:'
+        text += table(brief[['dataset','regime','mean_pp','sd_pp','n','seeds']])
+    text += '\nSolo se comparan pares completos y compatibles. Las tablas paired/excluded enumeran también condiciones sin ninguno de los brazos. '
+    text += 'SD con una seed queda indefinida; los clientes no son réplicas. Coberturas diferentes no sustentan comparaciones de medias entre regímenes.\n'
+    text += 'Validation selecciona el checkpoint; expertise construye M. No existe test local independiente v3. La accuracy de las celdas acreditadas no valida independientemente su generalización ni capacidad de rechazo OOD. '
+    text += 'No se inventan curvas por época: solo hay selection_records. No se infiere equivalencia, superioridad universal de probabilidades ni pérdida causal de dark knowledge. No se seleccionaron variantes con test.\n'
+    text += '\n## Pendiente y límites\n\n' + manifest['checkpoint_limitation'] + '\n\n'
+    text += 'La completitud del baseline configurado no equivale a completar los diez métodos originales. No se ejecutó el exportador global de baseline sobre la cuadrícula original incompleta. '
+    text += 'Los bloques individuales completos pueden revisarse en exports/ sin recrear KD. El análisis definitivo original de diez métodos sigue pendiente mientras falten identidades.\n'
+    text += 'La curva usa results_proxy_size_expert_prob.csv con CE y EXPERT-prob; N=10000 se reutiliza del supervisado y baseline. '
+    text += 'CE reutilizado entre regímenes no añade réplicas. Un cruce solo se acota entre N evaluados, no demuestra un óptimo. 1200 updates no igualan ejemplos consumidos. '
+    text += 'Las celdas sin resultados muestran inventario y aplazan únicamente sus figuras dependientes.\n'
     (out/'report.md').write_text(text)
     return text
 
@@ -423,4 +584,10 @@ def audit_conditions(out):
     for field in ('proxy_sha256','teachers_sha256','artifact_creation_commit'):
         require(merged[field+'_declared'].eq(merged[field+'_observed']).all(),'Conditions mismatch: '+field)
     require(np.allclose(merged.M_density_declared,merged.M_density_observed),'Conditions M density')
+    from article1.conditions import _directory_hash, _array_hash
+    for row in merged.itertuples():
+        name=f'{row.dataset}-seed{row.seed}-{row.regime}'
+        require(_directory_hash(out/'snapshots'/'partitions'/name)==row.partition_sha256,'Conditions partition hash')
+        with np.load(out/'snapshots'/'sources'/name/'teacher_cache.npz',allow_pickle=False) as cache:
+            require(_array_hash(cache['expertise_counts'],cache['expertise_accuracy'])==row.expertise_sha256,'Conditions expertise hash')
     save_table(out,'conditions_audit',merged)

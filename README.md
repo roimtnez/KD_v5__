@@ -531,66 +531,100 @@ python -m article1.reproduce --dataset mnist --seed 42 --method expert_prob --ca
 
 No se han medido tiempos ni equivalencia CUDA en el MSI desde este entorno.
 
-## Análisis provisional sobre instantáneas independientes
+## Actualizar el análisis durante supervised y proxy-curve
 
-Desde un checkout independiente, con un Python que ya disponga de numpy, pandas,
-matplotlib, nbformat, nbclient e ipykernel, sin cambiar el entorno de entrenamiento:
+Trabajar en la rama actual `cleanup/article1-base`. Las salidas del análisis se
+mantienen en un directorio distinto del usado por el entrenamiento; no se cambian
+el pipeline, las colas, los CSV originales ni las dependencias de entrenamiento.
+Con un Python que ya tenga numpy, pandas, matplotlib, nbformat, nbclient e ipykernel:
 
 ```bash
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 CUDA_VISIBLE_DEVICES='' \
   nice -n 15 python run_article1_analysis.py \
-  --source-root /ruta/checkout-activo/OUTPUTS/article1_v3 \
-  --data-dir /ruta/checkout-activo/data \
-  --analysis-root /tmp/article1-analysis-output
+  --source-root OUTPUTS/article1_v3 \
+  --data-dir data \
+  --analysis-root OUTPUTS/article1_analysis
 ```
 
-El comando copia una versión coherente de cada CSV (runner usa `os.replace`),
-valida estructura y registra fecha, filas, SHA256 y ruta original. Copia caches y
-particiones verificando sus manifiestos y reintenta archivos inestables. No lee
-checkpoints como modelos: registra presencia y SHA256 de bytes. Los metadatos v3
-solo tienen hashes de estados, por lo que esta limitación queda explícita y no se
-presenta como verificación independiente de los estados de los teachers.
+El programa ejecuta los tres notebooks de progreso, expertise y presupuesto en
+CPU, con un hilo y sin entrenar ni cargar checkpoints. Jupyter requiere sockets
+locales. Guarda los notebooks ejecutados, `manifest.json`, `report.md`, `tables/`,
+`figures/` PNG/PDF y las entradas congeladas en `snapshots/`, bajo una fecha UTC.
+Para abrir los notebooks manualmente, definir `ARTICLE1_SNAPSHOT` con la ruta
+absoluta de esa instantánea. Para otra captura, ejecutar nuevamente el comando;
+no mezclar lecturas de los CSV activos dentro de un notebook.
 
-Cada directorio `<analysis-root>/<snapshot_id>/` contiene `manifest.json`,
-`snapshots/`, `tables/`, `figures/`, `notebooks/` ejecutados y `report.md`.
-Los notebooks `article1_progress_analysis.ipynb`,
-`article1_expertise_diagnostics.ipynb` y `article1_proxy_budget_analysis.ipynb`
-usan `ARTICLE1_SNAPSHOT` para leer exclusivamente esa copia. Para abrirlos de forma
-interactiva, exportar dicha variable con la ruta absoluta de la instantánea.
-Los resultados ausentes se inventarían como pendientes; las figuras dependientes
-se aplazan. No se cambian máscaras ni reglas por soporte escaso.
+El runner reemplaza su CSV atómicamente. El análisis copia una versión completa,
+verifica estructura, inode/tamaño/fecha y hashes antes de aceptarla. El manifiesto
+registra filas, rutas, fechas y hashes, además del commit y copias del código de
+análisis. Las particiones y caches se verifican por sus manifiestos y la regla M.
+No se deserializan checkpoints: se comprueba presencia y se registran hashes de
+bytes. Los hashes de estados declarados no se presentan como recalculados.
 
-El análisis provisional conserva los diez métodos y las 54 condiciones, aunque
-el checkout activo haya reducido sus métodos por un cambio local. Antes de figuras
-muestra presencia/ausencia/invalidez por identidad. Los contrastes conservan solo
-pares completos con CRN compatible y publican exclusiones, seeds, media y SD
-muestral. No promedia clientes como réplicas. Las métricas vacías legítimas (p. ej.
-masa fuera de soporte para controles) se conservan, nunca se rellenan con ceros.
+### Dos ámbitos de completitud
 
-### Cuando estén las 540 filas
+El baseline configurado actualmente contiene seis métodos y **324 identidades**
+(54 condiciones × 6). Los controles y EXPERT-logit se han separado en
+`results_rq2_backup.csv`. Este archivo se incorpora al análisis como fuente
+complementaria, después de comprobar sus identidades, procedencia y CRN.
 
-1. Crear una nueva instantánea; auditar CSV, caches, particiones y procedencia.
-   Resolver cualquier duplicado, conflicto, SR anterior a revisión 2 o CRN distinto.
-   La auditoría de estados de checkpoint tiene la limitación indicada arriba.
-2. En un directorio de trabajo limpio, copiar **de la instantánea** únicamente
-   `results_baseline.csv` y `conditions.csv`. Nunca usar un CSV activo o incompleto.
-3. Ejecutar `python -m article1.baseline_results --output-root /ruta/copia-completa`.
-   Conserva la exigencia de 540 identidades y exporta `results_selection.csv`,
-   `results_pooling.csv`, `results_expertise.csv`, `results_support_v2.csv`,
-   `results_controls.csv` y `results_expert_logit_focal.csv`. El exportador rechaza
-   bloques existentes discrepantes; no usar como destino el bloque piloto.
-4. Ejecutar `article1_definitive_analysis.ipynb` con `OUT` apuntando a esa copia y
-   `STAGE="baseline"`. La exigencia de cuadrícula completa permanece intacta.
+`configured_completeness.csv` muestra la cuadrícula configurada; `completeness.csv`
+conserva la cuadrícula científica original de **540 identidades y diez métodos**.
+Un baseline configurado completo no significa que estén todos los controles.
+El inventario original es independiente de `BASELINE_METHODS`, para que un cambio
+en la cola no oculte ausencias. Las tablas paired/excluded incluyen condiciones
+sin ninguno de los brazos, seeds presentes, media y SD muestral. Con una seed,
+la SD permanece indefinida. Los clientes no son réplicas independientes.
 
-Antes de lanzar fases previstas, `supervised` audita el bloque selection y
-`proxy-curve` audita el bloque expertise. Preparar los bloques exportados completos
-mediante el procedimiento anterior; no relanzar expertise para recrear KD existente.
-Este análisis no lanza fases ni modifica colas. La curva lee CE y EXPERT-prob del
-mismo `results_proxy_size_expert_prob.csv`; no usa `results_proxy_size.csv`.
-CE N=10000 se reutiliza de supervisado y KD N=10000 de baseline/expertise, con
-rechazo de copias discrepantes. CE no exige máscara ni cache privado iguales a KD;
-sí proxy, etiquetas, inicialización, batches, optimizador y 1200 updates compatibles.
-CE reutilizado entre regímenes no agrega réplicas. Subconjuntos anidados se verifican
-con `article1.proxy.proxy_positions`. Un cruce solo se acota entre N evaluados.
+El análisis definitivo existente exige la cuadrícula completa del `STAGE`
+configurado; actualmente `STAGE="baseline"` corresponde a los seis métodos.
+Sus resultados no deben presentarse como el análisis definitivo de diez métodos.
+No se ha reducido ni alterado su validación para admitir condiciones incompletas.
 
-Pruebas: `python -m pytest -q tests/test_progress.py`.
+### Bloques para las dependencias del pipeline
+
+`pipeline_dependencies.csv` verifica los archivos de entrada al tomar la
+instantánea: `supervised` exige `results_selection.csv` completo (108 filas) y
+`proxy-curve` exige `results_expertise.csv` completo (54 filas).
+
+El análisis prepara en **la instantánea**, bajo `exports/`, únicamente bloques con
+todas sus identidades válidas. `exported_blocks.csv` identifica los bloques listos
+y los pendientes. No fabrica CSV vacíos para controles incompletos, no instala esos
+bloques en la cola activa y no relanza expertise para recrear KD del baseline.
+Los bloques listos sirven para preparar las dependencias al revisar la cola.
+Este procedimiento por bloques no es la exportación de la cuadrícula completa.
+
+### Supervisado y curva de presupuesto
+
+Se leen `results_supervised_proxy.csv`, `results_proxy_size_expert_prob.csv` y las
+referencias N=10000 del baseline o expertise. La curva guarda **CE y EXPERT-prob en
+el mismo CSV**, distinguidos por método; no se usa `results_proxy_size.csv`.
+Copias de la misma ejecución se reutilizan solo si no discrepan. Se conserva en
+la tabla la lista de archivos donde apareció cada ejecución.
+
+El diseño incluye nueve CE N=10000, doce CE CIFAR de tamaños inferiores y 36 KD
+CIFAR para IID/alpha0p1/single, más nueve referencias KD N=10000 reutilizadas.
+Se verifican subconjuntos anidados, proxy/etiquetas, inicialización, batches,
+optimizador y presupuesto de 1200 updates. CE no exige igualdad de cache privado
+ni de M con KD. CE reutilizado entre regímenes no añade réplicas. Las ausencias
+aplazan las figuras dependientes; no se imputan ceros. Un cruce solo se acota entre
+N evaluados; presupuesto fijo de updates no iguala ejemplos consumidos.
+
+### Cuando estén las 540 identidades originales
+
+1. Capturar una nueva instantánea y auditar CSV, caches, particiones y procedencia.
+2. Construir una copia de trabajo completa con las filas verificadas de baseline
+   y respaldo RQ2, sin duplicados ni conflictos, y `conditions.csv` de la instantánea.
+   El exportador sigue la configuración de `T8_BLOCKS`: para el diseño original,
+   usar una revisión de análisis con los diez métodos explícitos, sin cambiar la
+   configuración de una cola activa.
+3. Ejecutar `python -m article1.baseline_results --output-root /ruta/copia-completa`
+   solamente sobre esa copia completa y validada, en un directorio limpio.
+   Los bloques son `results_selection.csv`, `results_pooling.csv`,
+   `results_expertise.csv`, `results_support_v2.csv`, `results_controls.csv` y
+   `results_expert_logit_focal.csv`. El exportador rechaza destinos discrepantes.
+4. Ejecutar `article1_definitive_analysis.ipynb` con `OUT` apuntando a la copia y
+   `STAGE="baseline"`, declarando explícitamente el diseño de diez métodos.
+
+Pruebas de instantáneas y análisis:
+`python -m pytest -q tests/test_progress.py`.
