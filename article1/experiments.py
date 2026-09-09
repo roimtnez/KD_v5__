@@ -1,18 +1,20 @@
 """Minimal selection → pooling → expertise → support experiment."""
 
-# A convenience full-grid phase.  Keep the probability operators first so a
+# A convenience full-grid phase. Keep the probability operators first so a
 # long baseline run begins with the requested probability-space results.
+# The logit controls below are deliberately kept out of this default: run the
+# ``controls`` phase when those ablations are wanted.
 BASELINE_METHODS = (
     "feddf_prob",
     "expert_prob",
     "expert_prob_sr",
     "oracle_prob",
     "feddf_logit",
-    "confidence_logit",
-    "consensus_logit",
-    "energy_logit",
-    "expert_logit",
     "oracle_logit",
+    # "confidence_logit",
+    # "consensus_logit",
+    # "energy_logit",
+    # "expert_logit",
 )
 
 RQ1_METHODS = ("feddf_logit", "oracle_logit")
