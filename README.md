@@ -533,6 +533,8 @@ No se han medido tiempos ni equivalencia CUDA en el MSI desde este entorno.
 
 ## Actualizar el análisis durante supervised y proxy-curve
 
+Última ejecución y resultados observados: [estado del análisis](docs/article1_analysis_status.md).
+
 Trabajar en la rama actual `cleanup/article1-base`. Las salidas del análisis se
 mantienen en un directorio distinto del usado por el entrenamiento; no se cambian
 el pipeline, las colas, los CSV originales ni las dependencias de entrenamiento.
