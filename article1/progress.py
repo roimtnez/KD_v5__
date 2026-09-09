@@ -20,7 +20,7 @@ from article1.experiments import BASELINE_METHODS as CONFIGURED_BASELINE_METHODS
 from article1.hashes import file_sha256, array_sha256
 from article1.partitioning import load_partitions
 from article1.distillation import METHODS, authority_from_expertise, metadata_identity
-from article1.analysis import KEY, METRICS, ROUTING, summarize
+from article1.analysis import KEY, METRICS, ROUTING, summarize, baseline_design, BASELINE_DESIGNS
 from article1.proxy import proxy_positions
 
 SHARED = ['proxy_sha256','proxy_labels_sha256','proxy_master_sha256','student_init_sha256',
@@ -36,7 +36,8 @@ CE = 'supervised_proxy_ce'
 BASELINE_METHODS = tuple(METHODS)
 RESULT_FILES = ('results_baseline.csv', 'results_rq2_backup.csv',
                 'results_supervised_proxy.csv', 'results_proxy_size_expert_prob.csv',
-                'results_expertise.csv', 'results_selection.csv')
+                'results_expertise.csv', 'results_selection.csv', 'results_pooling.csv',
+                'results_support_v2.csv', 'results_controls.csv', 'results_expert_logit_focal.csv')
 
 def now():
     return datetime.now(timezone.utc).isoformat()
@@ -111,6 +112,9 @@ def compatible_pairs(frame, left, right, fields=KD, keys=KEY, metrics=METRICS):
         if reason:
             excluded.append(dict(**ident,left=left,right=right,reason=reason)); continue
         values = dict(**ident,left=left,right=right)
+        for field in ('run_id','input_file'):
+            if field in a:
+                values[field+'_left'], values[field+'_right'] = a[field], b[field]
         for metric in metrics:
             if not np.isfinite([a[metric],b[metric]]).all():
                 reason='nonfinite_'+metric; break
@@ -263,6 +267,17 @@ def validate_rows(frame,coverage,subsets,baseline=True):
             reasons.append('unexpected_condition')
         if row.get('protocol_version')!='article1-v3': reasons.append('protocol')
         if row.get('updates')!=1200: reasons.append('budget')
+        for field, expected in dict(optimizer='AdamW', learning_rate=.001, weight_decay=.0001, scheduler='none', proxy_view='deterministic_evaluation', proxy_master_size=10000).items():
+            if row.get(field) != expected: reasons.append('recipe_'+field)
+        if row.get('proxy_selection_seed') != row.seed: reasons.append('proxy_selection_seed')
+        policy = 'full_original_order' if row.proxy_size == 10000 else 'nested_stratified_v1'
+        if row.get('proxy_selection') != policy: reasons.append('proxy_selection')
+        if row.proxy_size > 0:
+            batch = min(256, int(row.proxy_size))
+            batches = (int(row.proxy_size)+batch-1)//batch
+            epochs, remainder = divmod(1200, batches)
+            seen = epochs*int(row.proxy_size) + min(remainder*batch, int(row.proxy_size))
+            if row.get('examples_seen') != seen: reasons.append('examples_seen')
         if row.method=='expert_prob_sr' and row.get('target_revision')!=2: reasons.append('old_SR')
         needed=SHARED+['student_final_sha256','student_test_accuracy','student_test_nll']
         if row.method!=CE: needed+=KD+METRICS+ROUTING
@@ -282,6 +297,7 @@ def validate_rows(frame,coverage,subsets,baseline=True):
             cov=coverage[(coverage.dataset==row.dataset)&(coverage.regime==row.regime)&(coverage.seed==row.seed)] if not coverage.empty else coverage
             if len(cov)!=1: reasons.append('unverified_source')
             else:
+                if row.get('cache_creation_commit') != cov.iloc[0].artifact_creation_commit: reasons.append('cache_creation_commit')
                 for f in ['cache_sha256','M_sha256']:
                     if row.get(f)!=cov.iloc[0][f]: reasons.append(f+'_mismatch')
                 if str(row.method).startswith('expert') and row.proxy_size==10000:
@@ -316,7 +332,8 @@ def validate_rows(frame,coverage,subsets,baseline=True):
 
 def prepare(original,analysis_root,data_dir):
     original=Path(original).resolve(); out=Path(analysis_root).resolve()/datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
-    require(not out.is_relative_to(original), 'Analysis outputs must be outside original results directory')
+    require(not out.is_relative_to(original.parent.parent), 'Analysis outputs must be outside the training checkout')
+    require(Path(__file__).resolve().parents[1] != original.parent.parent, 'Use an independent analysis checkout')
     require(not out.is_relative_to(Path(data_dir).resolve()), 'Analysis outputs must be outside original data directory')
     for directory in ('snapshots','tables','figures'): (out/directory).mkdir(parents=True,exist_ok=False)
     root=Path(__file__).resolve().parents[1]
@@ -332,22 +349,34 @@ def prepare(original,analysis_root,data_dir):
     manifest['active_checkout_commit']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=original.parent.parent,text=True).strip()
     manifest['active_checkout_diff']=subprocess.check_output(['git','diff','--','article1/experiments.py'],cwd=original.parent.parent,text=True)
     for f in ('article1/progress.py', 'article1/analysis.py', 'run_article1_analysis.py',
-              'notebooks/article1_progress_analysis.ipynb', 'notebooks/article1_expertise_diagnostics.ipynb',
+              'article1/budget_analysis.py', 'article1/closure_report.py',
+              'notebooks/article1_definitive_analysis.ipynb', 'notebooks/article1_expertise_diagnostics.ipynb',
               'notebooks/article1_proxy_budget_analysis.ipynb'):
         stable_copy(root/f, out/'snapshots'/'analysis_code'/f, manifest)
     coverage,subsets=sources(original,out,manifest,Path(data_dir))
     path=out/'snapshots'/'results_baseline.csv'
     primary=validate_rows(read_csv(path) if path.exists() else pd.DataFrame(),coverage,subsets)
     save_table(out,'configured_baseline_validated',primary)
-    configured=inventory(primary, methods=CONFIGURED_BASELINE_METHODS)
+    detected = baseline_design(primary) if not primary.empty else 'six'
+    manifest['baseline_design'] = detected
+    manifest['configured_baseline_methods'] = list(BASELINE_DESIGNS[detected])
+    manifest['expected_configured_rows'] = 54 * len(BASELINE_DESIGNS[detected])
+    configured=inventory(primary, methods=BASELINE_DESIGNS[detected])
     save_table(out,'configured_completeness',configured)
-    frames=[read_csv(out/'snapshots'/f).assign(input_file=f) for f in ('results_baseline.csv','results_rq2_backup.csv') if (out/'snapshots'/f).exists()]
+    frames=[read_csv(out/'snapshots'/f).assign(input_file=f) for f in RESULT_FILES if f not in ('results_supervised_proxy.csv','results_proxy_size_expert_prob.csv') and (out/'snapshots'/f).exists()]
     frame=validate_rows(deduplicate_files(frames),coverage,subsets)
+    frame = audit_target_metrics(out, frame)
+    primary = frame[frame.run_id.isin(primary.run_id)].copy() if not primary.empty else primary
+    save_table(out,'configured_baseline_validated',primary)
+    configured=inventory(primary, methods=BASELINE_DESIGNS[detected])
+    save_table(out,'configured_completeness',configured)
     save_table(out,'baseline_validated',frame); inv=inventory(frame); save_table(out,'completeness',inv)
     manifest['configured_completeness']=configured.to_dict('records')
     manifest['configured_baseline_complete']=bool(configured.status.eq('present').all())
     manifest['full_grid_complete']=bool(inv.status.eq('present').all())
     manifest['completeness']=inv.to_dict('records')
+    import platform
+    manifest['versions'] = dict(python=platform.python_version(), numpy=np.__version__, pandas=pd.__version__, matplotlib=matplotlib.__version__, protocol='article1-v3')
     manifest['artifact_commits']=sorted(coverage.artifact_creation_commit.unique()) if not coverage.empty else []
     manifest['kd_execution_commits']=sorted(frame.kd_execution_commit.dropna().unique()) if not frame.empty else []
     manifest['checkpoint_limitation']='Checkpoint bytes fingerprinted and all ten files present; metadata only declares state hashes. These cannot be independently matched without deserializing checkpoints, forbidden here. Cache and partition hashes are verified.'
@@ -417,7 +446,7 @@ def pipeline_dependencies(out):
     save_table(out,'pipeline_dependencies',pd.DataFrame(records))
     return records
 
-def progress(out):
+def progress(out, optional_only=False, primary_methods=None):
     out=Path(out); completeness(out)
     frame=read_csv(out/'tables'/'baseline_validated.csv')
     if (out/'snapshots'/'conditions.csv').exists():
@@ -427,6 +456,8 @@ def progress(out):
     manifest['pipeline_dependencies'] = pipeline_dependencies(out)
     all_summaries=[]
     for a,b in CONTRASTS:
+        if optional_only and {a,b} <= (primary_methods or set()):
+            continue
         name=a+'__minus__'+b
         fields=KD
         if (a,b) in [('feddf_prob','feddf_logit'),('oracle_prob','oracle_logit'),('expert_prob','expert_logit'),('expert_prob_sr','expert_prob')]:
@@ -472,101 +503,20 @@ def expertise(out):
             ax.set(title=column,xlabel='Clase',ylabel='Cliente',xticks=range(10),yticks=range(10)); fig.colorbar(im,ax=ax)
         fig.suptitle(' · '.join(map(str,ident))+' · gris: sin evidencia; cero observado: color mínimo')
         save_figure(out,'expertise_'+'_'.join(map(str,ident)),fig)
+    from article1.analysis import expertise_relationships
+    expertise_relationships(out)
+    save_table(out, 'experts_per_class', cells[KEY+['class','experts_for_class']].drop_duplicates())
+    save_table(out, 'classes_per_teacher', cells[KEY+['client','classes_for_teacher']].drop_duplicates())
     return read_csv(out/'tables'/'coverage.csv')
 
-def proxy_budget(out):
-    out=Path(out); completeness(out)
-    paths=[out/'snapshots'/f for f in ('results_supervised_proxy.csv','results_proxy_size_expert_prob.csv','results_baseline.csv','results_expertise.csv')]
-    frames=[read_csv(p).assign(input_file=p.name) for p in paths if p.exists()]
-    combined=deduplicate_files(frames)
-    if not combined.empty: combined=combined[combined.method.isin([CE,'expert_prob'])]
-    combined=validate_rows(combined,read_csv(out/'tables'/'coverage.csv'),read_csv(out/'tables'/'proxy_subsets.csv'),False)
-    expected=[(d,'shared_proxy',s,CE,10000) for d,s in product(DATASETS,SEEDS)]
-    expected += [('cifar','shared_proxy',s,CE,n) for s,n in product(SEEDS,[100,500,1000,5000])]
-    expected += [('cifar',r,s,'expert_prob',n) for r,s,n in product(['iid','alpha0p1','single'],SEEDS,[100,500,1000,5000,10000])]
-    rows=[]
-    for d,r,s,m,n in expected:
-        g=combined[(combined.dataset==d)&(combined.regime==r)&(combined.seed==s)&(combined.method==m)&(combined.proxy_size==n)] if not combined.empty else combined
-        rows.append(dict(dataset=d,regime=r,seed=s,method=m,proxy_size=n,status='pending' if len(g)==0 else 'present' if len(g)==1 and g.valid.all() else 'invalid'))
-    inv=pd.DataFrame(rows); save_table(out,'proxy_budget_completeness',inv); print(inv.to_string(index=False))
-    save_table(out,'proxy_budget_validated',combined)
-    if not combined.empty:
-        ce = combined[combined.method.eq(CE) & combined.valid].copy()
-        save_table(out, 'supervised_observations', ce)
-        summaries = []
-        for metric in METRICS[:2]:
-            summary = summarize(ce, metric, groups=['dataset','proxy_size'])
-            summary['metric'] = metric
-            summary['seeds'] = summary.apply(lambda row: ','.join(map(str, sorted(ce[(ce.dataset==row.dataset)&(ce.proxy_size==row.proxy_size)].seed))), axis=1) if not summary.empty else pd.Series(dtype=str)
-            summaries.append(summary)
-        save_table(out, 'supervised_summary', pd.concat(summaries, ignore_index=True))
-    for r in ['iid','alpha0p1','single']:
-        if combined.empty: continue
-        subset=combined[(combined.dataset=='cifar')&((combined.method==CE)|(combined.regime==r))].copy()
-        pairs,excluded=compatible_pairs(subset,'expert_prob',CE,fields=SHARED,keys=['dataset','seed','proxy_size'],metrics=METRICS[:2])
-        save_table(out,'proxy_'+r+'_paired',pairs); save_table(out,'proxy_'+r+'_excluded',excluded)
-        if pairs.empty: continue
-        for metric in METRICS[:2]:
-            for column in [metric+'_left',metric+'_right','delta_'+metric]: effect_plot(out,'proxy_'+r+'_'+column,pairs,column,x='proxy_size')
-            save_table(out,'proxy_'+r+'_'+metric+'_summary',summarize(pairs,'delta_'+metric,groups=['dataset','proxy_size']))
-    manifest=json.loads((out/'manifest.json').read_text())
-    manifest['proxy_budget_completeness']=inv.to_dict('records')
-    manifest['proxy_pairs']={}
-    for regime in ['iid','alpha0p1','single']:
-        path=out/'tables'/('proxy_'+regime+'_paired.csv')
-        pairs=read_csv(path) if path.exists() else pd.DataFrame()
-        manifest['proxy_pairs'][regime]={'complete':len(pairs),'seeds':sorted(pairs.seed.unique().tolist()) if not pairs.empty else []}
-    (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    return inv
+def proxy_budget(out, mode='provisional'):
+    from article1.budget_analysis import analyze_budget
+    return analyze_budget(Path(out), mode=mode)
+
 
 def report(out):
-    """Describe this snapshot; never bake a previous run's status into the report."""
-    out = Path(out)
-    manifest = json.loads((out/'manifest.json').read_text())
-    full = read_csv(out/'tables'/'completeness.csv')
-    primary = read_csv(out/'tables'/'configured_completeness.csv')
-    proxy = read_csv(out/'tables'/'proxy_budget_completeness.csv')
-    blocks = read_csv(out/'tables'/'exported_blocks.csv')
-    dependencies = read_csv(out/'tables'/'pipeline_dependencies.csv')
-    def table(frame):
-        return '\n```\n' + frame.to_string(index=False) + '\n```\n'
-    def counts(frame):
-        return frame.groupby(['dataset','status']).size().rename('identidades').reset_index()
-    text = '# Artículo 1: actualización sobre instantánea\n\n'
-    text += f"Fecha UTC: {manifest['snapshot_date']}. Commit del análisis: `{manifest['analysis_commit']}`.\n"
-    text += f"Checkout de origen: `{manifest['active_checkout_commit']}`. Cada entrada tiene ruta, SHA256 y fecha en manifest.json.\n\n"
-    text += '## Observado\n\n'
-    text += f"Baseline configurado ({len(manifest['configured_baseline_methods'])} métodos, {manifest['expected_configured_rows']} identidades esperadas):"
-    text += table(counts(primary))
-    text += 'Cuadrícula científica original (10 métodos, 540 identidades), incorporando el respaldo RQ2 tras verificar identidad, caches y CRN:'
-    text += table(counts(full))
-    text += f"Fuentes verificadas por cache, particiones y regla M: {sum(row['status']=='present' for row in manifest['source_inventory'])}/54.\n"
-    text += f"Commits declarados de caches: {manifest['artifact_commits']}. De KD: {manifest['kd_execution_commits']}. No se atribuye al proceso activo el commit actual por su mera presencia en disco.\n\n"
-    text += 'Supervisado y curva, sin multiplicar CE por régimen:' + table(counts(proxy))
-    text += 'Bloques completos preparados exclusivamente en `exports/` de esta instantánea:'
-    text += table(blocks[['filename','expected','present','status']])
-    text += 'Dependencias del pipeline observadas en los archivos originales al tomar la instantánea:' + table(dependencies)
-    text += '\nNo se inició ninguna fase ni se modificaron CSV, caches, checkpoints, particiones o colas originales. '
-    text += 'La ausencia de un archivo no permite afirmar si un proceso sigue vivo. Los bloques preparados no se instalaron en la cola activa.\n'
-    summary = read_csv(out/'tables'/'contrast_summary.csv')
-    if not summary.empty:
-        brief = summary[summary.metric.eq('student_test_accuracy') & summary.contrast.eq('expert_prob__minus__feddf_prob') & summary.regime.isin(['iid','single'])]
-        brief = brief.copy()
-        brief['mean_pp'], brief['sd_pp'] = 100*brief['mean'], 100*brief['sd']
-        text += '\n## Interpretación\n\nEXPERT-prob − FedDF-prob, extremos categóricos IID y Single (puntos porcentuales; SD muestral). Todos los regímenes, NLL y contrastes se conservan en `tables/contrast_summary.csv`:'
-        text += table(brief[['dataset','regime','mean_pp','sd_pp','n','seeds']])
-    text += '\nSolo se comparan pares completos y compatibles. Las tablas paired/excluded enumeran también condiciones sin ninguno de los brazos. '
-    text += 'SD con una seed queda indefinida; los clientes no son réplicas. Coberturas diferentes no sustentan comparaciones de medias entre regímenes.\n'
-    text += 'Validation selecciona el checkpoint; expertise construye M. No existe test local independiente v3. La accuracy de las celdas acreditadas no valida independientemente su generalización ni capacidad de rechazo OOD. '
-    text += 'No se inventan curvas por época: solo hay selection_records. No se infiere equivalencia, superioridad universal de probabilidades ni pérdida causal de dark knowledge. No se seleccionaron variantes con test.\n'
-    text += '\n## Pendiente y límites\n\n' + manifest['checkpoint_limitation'] + '\n\n'
-    text += 'La completitud del baseline configurado no equivale a completar los diez métodos originales. No se ejecutó el exportador global de baseline sobre la cuadrícula original incompleta. '
-    text += 'Los bloques individuales completos pueden revisarse en exports/ sin recrear KD. El análisis definitivo original de diez métodos sigue pendiente mientras falten identidades.\n'
-    text += 'La curva usa results_proxy_size_expert_prob.csv con CE y EXPERT-prob; N=10000 se reutiliza del supervisado y baseline. '
-    text += 'CE reutilizado entre regímenes no añade réplicas. Un cruce solo se acota entre N evaluados, no demuestra un óptimo. 1200 updates no igualan ejemplos consumidos. '
-    text += 'Las celdas sin resultados muestran inventario y aplazan únicamente sus figuras dependientes.\n'
-    (out/'report.md').write_text(text)
-    return text
+    from article1.closure_report import write_report
+    return write_report(Path(out))
 
 
 def audit_conditions(out):
@@ -591,3 +541,37 @@ def audit_conditions(out):
         with np.load(out/'snapshots'/'sources'/name/'teacher_cache.npz',allow_pickle=False) as cache:
             require(_array_hash(cache['expertise_counts'],cache['expertise_accuracy'])==row.expertise_sha256,'Conditions expertise hash')
     save_table(out,'conditions_audit',merged)
+
+
+def audit_target_metrics(out, frame):
+    """Reconstruct diagnostics, one immutable condition/cache at a time; no inference."""
+    from article1.distillation import build_target
+    if frame.empty:
+        return frame
+    frame=frame.copy()
+    records=[]
+    fields=METRICS[2:]+ROUTING+['pre_restriction_outside_support_mass']
+    for (dataset,regime,seed),rows in frame.groupby(KEY):
+        eligible=rows[rows.valid]
+        if eligible.empty:
+            continue
+        path=out/'snapshots'/'sources'/f'{dataset}-seed{seed}-{regime}'/'teacher_cache.npz'
+        with np.load(path,allow_pickle=False) as cache:
+            z,y,mask,indices=[cache[key] for key in ('logits','labels','M','proxy_idx')]
+        for index,row in eligible.iterrows():
+            positions=proxy_positions(indices,y,int(row.proxy_size),int(seed))
+            target=build_target(z[positions],y[positions],mask,method=row.method,temperature=float(row.temperature))
+            mismatch=[]
+            for field in fields:
+                actual,expected=row.get(field),target.metrics[field]
+                good=pd.isna(actual) if expected is None else not pd.isna(actual) and np.isclose(actual,expected,atol=1e-9,rtol=1e-9)
+                if not good:
+                    mismatch.append(field)
+            records.append(dict(run_id=row.run_id,dataset=dataset,regime=regime,seed=int(seed),method=row.method,valid=not mismatch,reason=','.join(mismatch)))
+            if mismatch:
+                frame.loc[index,'valid']=False
+                frame.loc[index,'invalid_reason']='target_metrics:'+','.join(mismatch)
+            del target
+        del z,y,mask,indices
+    save_table(out,'target_metric_audit',pd.DataFrame(records))
+    return frame
