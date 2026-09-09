@@ -423,11 +423,45 @@ Validation de la revisión unlabeled/baseline: 59 pruebas correctas y 8 omitidas
 
 ### Rendimiento CUDA y MSI Pulse GL76
 
-El nombre Pulse GL76 no identifica por sí solo la configuración. Como referencia,
-la [ficha oficial del 11UEK-038XES](https://storage-asset.msi.com/specSheet/es/nb/Pulse%20GL76%2011UEK-038XES.pdf)
-indica i7-11800H, RTX 3060 de 6 GB, 32 GB DDR4-3200 y SSD NVMe de 1 TB.
-No se presupone que esos sean los componentes de tu unidad. El pipeline imprime
-GPU, VRAM y versiones de PyTorch/CUDA/cuDNN al ejecutar una fase CUDA.
+Configuración confirmada por las salidas del equipo del 9 de septiembre de 2026:
+
+| Componente | Valor observado |
+|---|---|
+| Portátil | MSI Pulse GL76 (modelo indicado por el usuario) |
+| GPU | NVIDIA GeForce RTX 3060, 6144 MiB de VRAM |
+| Driver NVIDIA | 595.84 |
+| PyTorch | 2.9.1+cu128 |
+| Runtime CUDA de PyTorch | 12.8 |
+| cuDNN | 91002, valor devuelto por PyTorch |
+| Límite de potencia actual informado | 80 W |
+
+La cabecera CUDA 13.2 de `nvidia-smi` corresponde al soporte del driver;
+no sustituye al runtime CUDA 12.8 de PyTorch. Conservar este entorno que ya
+está entrenando. Estas consultas no confirman la RAM, el SSD ni el SKU completo
+del portátil. El pipeline imprime GPU, VRAM y versiones al ejecutar una fase CUDA.
+
+**Estado del código:** están aplicadas las optimizaciones conservadoras de
+transporte para esta GPU, compartidas entre teachers, CE y KD. Esto no certifica
+un máximo rendimiento ni equivalencia numérica entre commits en CUDA: ambos
+requieren medición local. El cambio de transporte pasó 67 pruebas con PyTorch
+2.9.1 CPU y torchvision 0.24.1 CPU, además de lint. No se ejecutó entrenamiento
+científico ni se midió CUDA desde el entorno de revisión.
+
+**Prioridad actual: estabilizar la refrigeración.** En las capturas del equipo
+se observaron 88–89 °C, objetivo térmico informado de 87 °C,
+`SW Thermal Slowdown: Active` y frecuencia SM/Graphics de 232 MHz. Esto confirma
+limitación térmica en ese instante; no cuantifica la pérdida de rendimiento
+sostenida. La primera captura mostró 99 % de utilización y 3089/6144 MiB ocupados:
+una GPU puede permanecer ocupada trabajando a frecuencias reducidas. Los
+contadores de eventos son acumulados y no deben atribuirse íntegramente al
+experimento actual. Véase la [documentación de NVIDIA](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
+
+Comprobar ventilación, entradas y salidas de aire y funcionamiento de ventiladores;
+medir con condiciones térmicas estables. Mantener un entrenamiento simultáneo.
+No aumentar potencia ni batch para ocupar la VRAM libre. La limitación térmica
+observada no exige por sí sola descartar resultados; registrar sus efectos al
+comparar tiempos de ejecución. Resolver esta limitación antes de atribuir una
+mejora de velocidad a workers, pinning u otros cambios de software.
 
 Optimizaciones de transporte aplicadas al runtime compartido CE/KD y teachers:
 
@@ -476,7 +510,8 @@ Para identificar y observar tu GPU sin modificar el experimento:
 
 ```bash
 nvidia-smi
-nvidia-smi --query-gpu=name,memory.total,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv -l 2
+nvidia-smi -q -d PERFORMANCE,TEMPERATURE,POWER,CLOCK
+nvidia-smi --query-gpu=timestamp,temperature.gpu,utilization.gpu,clocks.sm,power.draw --format=csv -l 2
 ```
 
 La disponibilidad de sensores depende del driver. Medir conectado a corriente y
