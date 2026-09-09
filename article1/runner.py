@@ -66,8 +66,8 @@ def _evaluate(model, loader, device):
     nll = 0.0
     with torch.no_grad():
         for x, y in loader:
-            logits = model(x.to(device))
-            y = y.to(device)
+            logits = model(x.to(device, non_blocking=True))
+            y = y.to(device, non_blocking=True)
             correct += int((logits.argmax(1) == y).sum())
             total += len(y)
             nll += float(F.cross_entropy(logits, y, reduction="sum"))
@@ -216,6 +216,7 @@ def _train_proxy(
         batch_size=min(batch_size, len(indices)),
         sampler=order,
         num_workers=0,
+        pin_memory=dev.type == "cuda",
     )
     targets = torch.from_numpy(labels if q is None else q).to(dev)
     consumed = hashlib.sha256()
@@ -228,8 +229,10 @@ def _train_proxy(
             # Include batch boundaries and actual dataset indices, not unused suffixes.
             consumed.update(np.asarray([len(positions)], dtype=np.int64).tobytes())
             consumed.update(indices[positions.numpy()].tobytes())
-            outputs = model(x.to(dev))
-            batch_targets = targets.index_select(0, positions.to(dev))
+            outputs = model(x.to(dev, non_blocking=True))
+            batch_targets = targets.index_select(
+                0, positions.to(dev, non_blocking=True)
+            )
             loss = (
                 F.cross_entropy(outputs, batch_targets)
                 if q is None
@@ -238,13 +241,15 @@ def _train_proxy(
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
-            last_loss = float(loss.detach())
+            # Keep only the scalar, without its graph; copy to CPU once after training.
+            # float(loss) here would synchronize CUDA on every update.
+            last_loss = loss.detach()
             completed += 1
             examples += len(positions)
             if completed == updates:
                 break
         epoch += 1
-    accuracy, nll = _evaluate(model, test_loader(test_ds), dev)
+    accuracy, nll = _evaluate(model, test_loader(test_ds, device=dev), dev)
     return {
         "student_init_sha256": initial_hash,
         "batch_order_sha256": order.digest.hexdigest(),  # Historical epoch-permutation hash.
@@ -260,7 +265,7 @@ def _train_proxy(
         "weight_decay": 1e-4,
         "scheduler": "none",
         "proxy_view": "deterministic_evaluation",
-        "student_final_train_loss": last_loss,
+        "student_final_train_loss": float(last_loss),
         "student_test_accuracy": accuracy,
         "student_test_nll": nll,
         "protocol_version": PROTOCOL_VERSION,

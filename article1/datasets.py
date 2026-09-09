@@ -54,11 +54,13 @@ def labels_of(dataset) -> list[int]:
     return [int(value) for value in dataset.targets]
 
 
-def test_loader(dataset, batch_size: int = 256) -> DataLoader:
+def test_loader(
+    dataset, batch_size: int = 256, *, device: str | torch.device = "cpu"
+) -> DataLoader:
     return DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=torch.device(device).type == "cuda",
     )

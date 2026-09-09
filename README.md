@@ -420,3 +420,78 @@ Validación de la unificación por fases: 52 pruebas correctas; compilación del
 Validación del diseño mínimo probabilístico: 57 pruebas correctas y 8 omitidas por ausencia de PyTorch/torchvision; lint y compilación correctos. Se comprobaron los planes de todas las fases sin entrenar. Los tests nuevos cubren FedDF-prob, soporte de masa diminuta/underflow, fallback, revisión de identidades SR y máscaras no binarias. No se han ejecutado entrenamientos reales ni medido equivalencia empírica entre operadores.
 
 Validation de la revisión unlabeled/baseline: 59 pruebas correctas y 8 omitidas por ausencia de PyTorch/torchvision; compilación y lint correctos. Se verifican las 540 filas sintéticas, exportación idempotente sin entrenamiento, rechazo de destinos conflictivos y revisión SR por método. No se ha ejecutado ni implementado una KD unlabeled.
+
+### Rendimiento CUDA y MSI Pulse GL76
+
+El nombre Pulse GL76 no identifica por sí solo la configuración. Como referencia,
+la [ficha oficial del 11UEK-038XES](https://storage-asset.msi.com/specSheet/es/nb/Pulse%20GL76%2011UEK-038XES.pdf)
+indica i7-11800H, RTX 3060 de 6 GB, 32 GB DDR4-3200 y SSD NVMe de 1 TB.
+No se presupone que esos sean los componentes de tu unidad. El pipeline imprime
+GPU, VRAM y versiones de PyTorch/CUDA/cuDNN al ejecutar una fase CUDA.
+
+Optimizaciones de transporte aplicadas al runtime compartido CE/KD y teachers:
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `article1/runner.py` | `pin_memory` en el loader del proxy; copias H2D con `non_blocking=True` | Permitir transferencias desde memoria fijada sin esperar en el host tras cada copia |
+| `article1/runner.py` | Conservar solo la pérdida final separada del grafo; convertirla a `float` al terminar | Evitar una sincronización CPU/GPU por actualización |
+| `article1/local_training.py` | Copias H2D no bloqueantes; pinning según el dispositivo solicitado | Aplicar la misma política al entrenamiento y evaluación de teachers |
+| `article1/datasets.py` | Pinning del test solo cuando se evalúa en CUDA | Evitar fijar RAM al ejecutar explícitamente en CPU |
+| `run_article1_pipeline.py` | Mostrar dispositivo y versiones | Identificar el entorno real en el registro de ejecución |
+
+Los targets completos ya residen en el dispositivo durante KD. Se mantienen
+`num_workers=0`, batches, precisión FP32, RNG, optimizadores y algoritmos
+deterministas. Las copias GPU→CPU de logits siguen siendo bloqueantes antes de
+leer NumPy: convertirlas sin esperar podría leer datos incompletos.
+`pin_memory` más `non_blocking` no garantiza solapar transferencia y cómputo:
+se usa el mismo stream, y fijar memoria también tiene coste. No hay una mejora
+porcentual medida en el portátil. Véase la [guía oficial de PyTorch](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html).
+
+Siguientes optimizaciones, por orden de evaluación:
+
+1. Medir tiempo por celda y utilización GPU en el equipo, separando carga inicial,
+   construcción de targets, entrenamiento y evaluación. Comparar condiciones
+   idénticas y varias repeticiones, con calentamiento y sincronización CUDA en los
+   límites de las mediciones. No comparar tiempos de métodos distintos como si
+   midieran el efecto de una optimización.
+2. Probar 0/2/4 workers en un benchmark separado. Más procesos no implica mayor
+   velocidad; CIFAR aplica transformaciones por muestra y el lanzamiento de workers
+   tiene coste. `persistent_workers` puede ahorrar reinicios, pero cambia el ciclo
+   de vida del RNG. En teachers también afecta al augmentation; en students hay
+   dropout. Antes de adoptarlo exigir las mismas huellas de batches y estados, o
+   declarar un cambio de receta. No activar workers globalmente a mitad del estudio.
+3. Evitar crear la vista aumentada de entrenamiento en cada ejecución del student
+   (`datasets_for` la construye y el runner la descarta). Después valorar cachear
+   el proxy ya transformado en RAM: 10.000 × 3 × 32 × 32 float32 son unos 117 MiB,
+   sin contar estructuras auxiliares. Esto requiere conservar índices, etiquetas,
+   transformaciones y huellas, y medir el coste inicial frente al ahorro por época.
+4. Reducir sincronizaciones por batch en evaluación y agrupar carga/inicialización
+   entre métodos solo si el perfil lo justifica. El aislamiento actual por proceso
+   simplifica la reanudación y evita estado compartido accidental.
+5. AMP, TF32, `channels_last`, `torch.compile`, optimizadores fusionados o cambios
+   de batch son pruebas posteriores de rendimiento. Pueden cambiar resultados
+   numéricos o la receta experimental; no se activan en las comparaciones actuales.
+
+Para identificar y observar tu GPU sin modificar el experimento:
+
+```bash
+nvidia-smi
+nvidia-smi --query-gpu=name,memory.total,utilization.gpu,memory.used,temperature.gpu,power.draw --format=csv -l 2
+```
+
+La disponibilidad de sensores depende del driver. Medir conectado a corriente y
+con condiciones térmicas estables; no lanzar varios entrenamientos simultáneos
+sin medir contención de GPU/VRAM. Conservar el entorno CUDA que ya funciona.
+
+Si `--phase baseline --execute` sigue activo, **esperar a que termine antes de
+actualizar su checkout**: el pipeline arranca subprocesos que leerían el nuevo
+código. Después de actualizar, comprobar reproducción en un CSV separado antes
+de continuar. La comprobación siguiente repite una celda; no demuestra por sí
+sola equivalencia con el commit anterior. Para comparar commits, ejecutar esa
+misma celda con el mismo entorno en dos checkouts y comparar las huellas finales:
+
+```bash
+python -m article1.reproduce --dataset mnist --seed 42 --method expert_prob --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/cuda_io_repro.csv --device cuda
+```
+
+No se han medido tiempos ni equivalencia CUDA en el MSI desde este entorno.
