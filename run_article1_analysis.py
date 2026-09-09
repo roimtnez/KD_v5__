@@ -18,6 +18,7 @@ if __name__=='__main__':
     parser.add_argument('--data-dir',type=Path,required=True)
     parser.add_argument('--analysis-root',type=Path,required=True)
     parser.add_argument('--snapshot',type=Path,help='Reuse an already prepared immutable snapshot')
+    parser.add_argument('--curve-mode',choices=['provisional','definitive'],default='provisional')
     args=parser.parse_args()
     out=args.snapshot or prepare(args.source_root,args.analysis_root,args.data_dir)
     root=Path(__file__).resolve().parent
@@ -29,6 +30,7 @@ if __name__=='__main__':
         manifest['analysis_dirty']=subprocess.check_output(['git','status','--porcelain'],cwd=root,text=True).strip()
         (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     os.environ['ARTICLE1_SNAPSHOT']=str(out)
+    os.environ['ARTICLE1_CURVE_MODE']=args.curve_mode
     (out/'notebooks').mkdir(exist_ok=True)
     # Explicit kernel executable: use the current interpreter without installing anything.
     kernel_dir=out/'jupyter'/'kernels'/'article1-cpu'; kernel_dir.mkdir(parents=True,exist_ok=True)
@@ -36,7 +38,7 @@ if __name__=='__main__':
     os.environ['JUPYTER_PATH']=str(out/'jupyter')
     os.environ['JUPYTER_RUNTIME_DIR']=str(out/'jupyter'/'runtime')
     os.environ['IPYTHONDIR']=str(out/'ipython')
-    for name in ('article1_progress_analysis','article1_expertise_diagnostics','article1_proxy_budget_analysis'):
+    for name in ('article1_definitive_analysis','article1_expertise_diagnostics','article1_proxy_budget_analysis'):
         notebook=nbformat.read(root/'notebooks'/f'{name}.ipynb',as_version=4)
         NotebookClient(notebook,timeout=900,kernel_name='article1-cpu',resources={'metadata':{'path':str(root)}}).execute()
         nbformat.write(notebook,out/'notebooks'/f'{name}.ipynb')

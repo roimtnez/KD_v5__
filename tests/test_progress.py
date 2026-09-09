@@ -82,3 +82,27 @@ def test_export_only_complete_blocks(tmp_path):
  export_ready_blocks(tmp_path,raw.assign(valid=True))
  (tmp_path/'exports'/'results_expertise.csv').write_text('conflict')
  with pytest.raises(ValueError): export_ready_blocks(tmp_path,raw.assign(valid=True))
+
+
+def test_snapshot_retries_a_changed_source(tmp_path,monkeypatch):
+ import shutil
+ from article1.progress import stable_copy
+ source=tmp_path/'source.csv'; source.write_text('a,b\n1,2\n')
+ original=shutil.copyfile
+ calls=[]
+ def copying(src,dst):
+  result=original(src,dst)
+  if not calls: source.write_text('a,b\n3,4\n5,6\n')
+  calls.append(1)
+  return result
+ monkeypatch.setattr(shutil,'copyfile',copying)
+ manifest={'inputs':[]}
+ target=stable_copy(source,tmp_path/'copy.csv',manifest)
+ assert len(calls)==2 and target.read_bytes()==source.read_bytes()
+ assert len(manifest['inputs'])==1 and manifest['inputs'][0]['rows']==2
+
+
+def test_empty_optional_blocks_are_not_runs():
+ f=frame()
+ result=deduplicate_files([f, pd.DataFrame(columns=f.columns)])
+ assert len(result)==len(f)
