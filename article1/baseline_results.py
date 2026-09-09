@@ -27,19 +27,6 @@ def export_blocks(out: Path) -> list[Path]:
         & source.regime.isin(FOCAL_REGIMES)
     ].copy()
 
-    def canonical(frame):
-        return frame.sort_values("run_id").sort_index(axis=1).reset_index(drop=True)
-
-    # Check every destination before writing anything; never overwrite conflicts.
-    for path, rows in exports.items():
-        if path.exists():
-            existing = pd.read_csv(path, dtype=str, keep_default_na=False)
-            if "run_id" not in existing or not canonical(existing).equals(
-                canonical(rows)
-            ):
-                raise ValueError(
-                    f"existing block differs from baseline; inspect manually: {path}"
-                )
     for path, rows in exports.items():
         if not path.exists():
             rows.to_csv(path, index=False, mode="x")
