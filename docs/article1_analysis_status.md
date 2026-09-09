@@ -1,5 +1,7 @@
 # Artículo 1: estado del análisis — 9 de septiembre de 2026
 
+> Registro histórico de la instantánea de las 14:45 UTC. El estado posterior, con curva completa, está en [article1_closure/report.md](article1_closure/report.md); el plan actual está en [article1_paper/plan.md](article1_paper/plan.md).
+
 Instantánea UTC: **2026-09-09 14:45:08** (16:45:08 en Madrid).
 Código ejecutado: `67c328b285eebad4e203d2a57cd868b0df1fe735`, rama
 `cleanup/article1-base`. Se trabajó en esta rama, sin otro checkout.

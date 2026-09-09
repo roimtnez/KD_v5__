@@ -2,7 +2,22 @@
 
 Repositorio pequeño de investigación sobre **one-shot federated knowledge distillation**. El objetivo es determinar qué aporta una máscara de competencia cliente–clase y cómo deben contribuir los expertos al target del estudiante global.
 
-**Estado: 2026-09-08. Protocolo activo: `article1-v3`.** Esta versión cambia el reparto local a `train / validation / expertise = 70/10/20`, con estratificación por clase y estimación de expertise independiente de la selección del checkpoint. No contiene resultados científicos nuevos de v3. Los resultados previos de v2 son evidencia histórica; no se atribuyen al nuevo protocolo.
+**Estado: evidencia v3 cerrada en la instantánea del 9 de septiembre de 2026.**
+324 KD del diseño principal, 9 supervisados y 48 ejecuciones adicionales de curva;
+54 condiciones de teachers. La curva tiene 60 ejecuciones únicas con anclas
+reutilizadas y 45 pares. Los controles archivados siguen parcialmente completos.
+Véanse el [informe de cierre](docs/article1_closure/report.md) y el
+[plan del artículo](docs/article1_paper/plan.md). Las secciones históricas posteriores
+no sustituyen este estado ni implican que debamos volver a entrenar.
+
+**Para redactar:** abrir [article1_paper.ipynb](notebooks/article1_paper.ipynb).
+Funciona desde un checkout limpio con las tablas públicas de `docs/article1_closure/`,
+sin caches privados ni CUDA; exporta figuras y tablas a `OUTPUTS/article1_paper/`.
+Muestra media ± SD para resúmenes y seeds reales solo donde están publicadas.
+La reconstrucción editorial no reemplaza la auditoría original de modelos.
+
+El protocolo activo mantiene `train / validation / expertise = 70/10/20`.
+No hay nuevas ejecuciones en esta revisión editorial.
 
 ## 1. Alcance del artículo
 

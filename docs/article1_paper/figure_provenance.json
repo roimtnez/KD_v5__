@@ -1,0 +1,12 @@
+{
+  "source_snapshot": "2026-09-09T21:48:49.851425+00:00",
+  "source_analysis_commit": "808089e8feb8f91fa80ca964a8eb1fe0e4f3090b",
+  "scope": "Editorial rendering of published summaries and curve pairs; no cache re-audit.",
+  "inputs": {
+    "manifest.json": "a53986d1eb6be1bd5876fb09c390beb95cbcb4039662b7ab9a638e2b8b580d43",
+    "tables/main_contrast_summary.csv": "bb3cec387ea3ba7879f6d3393aace006b931ec91204d2daaea6cdc84c7172e7b",
+    "tables/private_knowledge_summary.csv": "c6e673f29272ab430defa4a724d2490f6e90cb315c4db695a48f6cb4ecaeb427",
+    "tables/proxy_curve_paired.csv": "c2e25a8f393a979f09e820ebd9c8da0f045261e5036eca61c8d3a42cadc087b2",
+    "tables/coverage.csv": "29d4a4aab55683816d6ac95730b311d3c5ccde73d9b7b79e83b358ac4a508749"
+  }
+}
