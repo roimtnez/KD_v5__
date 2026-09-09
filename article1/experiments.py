@@ -17,6 +17,7 @@ BASELINE_METHODS = (
 
 RQ1_METHODS = ("feddf_logit", "oracle_logit")
 T8_BLOCKS = {
+    "baseline": ("results_baseline.csv", BASELINE_METHODS),
     "rq1": ("results_selection.csv", RQ1_METHODS),
     "aggregation": ("results_pooling.csv", ("feddf_prob", "oracle_prob")),
     "expertise": ("results_expertise.csv", ("expert_prob",)),
@@ -24,6 +25,7 @@ T8_BLOCKS = {
     "controls": ("results_controls.csv", ("consensus_logit", "energy_logit")),
 }
 ANALYSIS_BLOCKS = {
+    "baseline": ("baseline",),
     "rq1": ("rq1",),
     "aggregation": ("rq1", "aggregation"),
     "expertise": ("rq1", "aggregation", "expertise"),

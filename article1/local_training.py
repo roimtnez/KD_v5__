@@ -51,7 +51,9 @@ def logits_for(model, loader, device: torch.device) -> tuple[np.ndarray, np.ndar
     values: list[np.ndarray] = []
     labels: list[np.ndarray] = []
     for x, y in loader:
-        values.append(model(x.to(device)).cpu().numpy().astype(np.float32))
+        values.append(
+            model(x.to(device, non_blocking=True)).cpu().numpy().astype(np.float32)
+        )
         labels.append(y.numpy())
     return np.concatenate(values), np.concatenate(labels).astype(np.int64)
 
@@ -68,13 +70,19 @@ def _per_class(
     return accuracy, counts
 
 
-def _loader(dataset, indices: np.ndarray, batch: int, shuffle: bool) -> DataLoader:
+def _loader(
+    dataset,
+    indices: np.ndarray,
+    batch: int,
+    shuffle: bool,
+    device: str | torch.device = "cpu",
+) -> DataLoader:
     return DataLoader(
         Subset(dataset, indices.tolist()),
         batch_size=batch,
         shuffle=shuffle,
         num_workers=0,
-        pin_memory=torch.cuda.is_available(),
+        pin_memory=torch.device(device).type == "cuda",
     )
 
 
@@ -120,7 +128,7 @@ def train_and_cache(
     expertise_counts = []
     selection_records = []
     hashes = []
-    proxy_loader = _loader(eval_ds, proxy_idx, 256, False)
+    proxy_loader = _loader(eval_ds, proxy_idx, 256, False, dev)
     proxy_labels: np.ndarray | None = None
     for cid, split in enumerate(clients):
         _seed(seed + cid)
@@ -130,14 +138,17 @@ def train_and_cache(
         best_accuracy = -1.0
         remaining = patience
         train_loader, validation_loader = (
-            _loader(train_ds, split["train_idx"], batch_size, True),
-            _loader(eval_ds, split["validation_idx"], 256, False),
+            _loader(train_ds, split["train_idx"], batch_size, True, dev),
+            _loader(eval_ds, split["validation_idx"], 256, False, dev),
         )
         best_epoch = 0
         for epoch in range(epochs):
             model.train()
             for x, y in train_loader:
-                loss = F.cross_entropy(model(x.to(dev)), y.to(dev))
+                loss = F.cross_entropy(
+                    model(x.to(dev, non_blocking=True)),
+                    y.to(dev, non_blocking=True),
+                )
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 optimizer.step()
@@ -172,7 +183,7 @@ def train_and_cache(
         hashes.append(state_hash)
         # No optimizer steps after selection. This split never selects the checkpoint.
         e_logits, e_labels = logits_for(
-            model, _loader(eval_ds, split["expertise_idx"], 256, False), dev
+            model, _loader(eval_ds, split["expertise_idx"], 256, False, dev), dev
         )
         selection_records.append(
             {

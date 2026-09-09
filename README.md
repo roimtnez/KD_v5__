@@ -168,10 +168,10 @@ Python 3.11+. Instalar en un entorno virtual:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt -r requirements-dev.txt
+python -m pip install -r requirements.txt
 ```
 
-Solo análisis/pruebas ligeras: `pip install -r requirements-dev.txt`. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
+Las dependencias están consolidadas en `requirements.txt`; no se requieren los antiguos requirements-dev/analysis. El notebook de particiones carga etiquetas de torchvision y necesita PyTorch/torchvision, además de Jupyter. Las pruebas de runtime se omiten explícitamente si faltan esas dependencias.
 
 ### Ejecución por fases: diseño mínimo
 
@@ -219,6 +219,7 @@ emparejados, no un test automático de equivalencia.
 
 | Fase opcional | Coste y finalidad |
 |---|---|
+| `baseline` | 540 KD: los diez métodos; guarda results_baseline.csv y analiza el conjunto completo |
 | `controls` | 108 KD Consensus-logit/Energy-logit, contra FedDF-logit; Confidence queda disponible solo en el runner |
 | `expert-logit` | 9 KD CIFAR IID/alpha0p1/single × tres seeds a T=8; compara con EXPERT-prob existente |
 | `temperature` | Completa/reutiliza esas 9 KD y añade 36 T=1/4 EXPERT-logit/prob |
@@ -232,7 +233,7 @@ python run_article1_pipeline.py --phase supervised --execute --device cuda
 python run_article1_pipeline.py --phase proxy-curve --execute --device cuda
 ```
 
-`--skip-notebooks` permite el análisis manual. El notebook acepta `STAGE=rq1`,
+`--skip-notebooks` permite el análisis manual. El notebook acepta `STAGE=baseline` (540 filas) o `STAGE=rq1`,
 `aggregation`, `expertise`, `support` o `controls`; exige respectivamente
 108/216/270/324/216 filas completas en los archivos de esos bloques. Exporta
 figuras y tablas en `minimal_analysis/<STAGE>/`. Los diagnósticos focales exportan
@@ -316,17 +317,93 @@ Los caches históricos con commit desconocido conservan `legacy_unverified`. El 
 
 ## 10. SIGUIENTES PASOS
 
-- [ ] Crear particiones v3 de los tres datasets/seeds y revisar heatmaps, recuentos escasos y ausencia de conjuntos vacíos. No usar resultados del test para modificar este reparto.
-- [ ] Validar una condición pequeña: entrenamiento local, selección en validation, M desde expertise, targets y repetición exacta KD. CUDA debe comprobarse en el entorno experimental.
-- [ ] Autorizar y ejecutar después el grid v3, manteniendo common random numbers y registro de procedencia. No reutilizar KD histórica como evidencia del nuevo reparto.
-- [ ] Cerrar los tres contrastes y sus captions con puntos emparejados por seed, media y SD. Clients no son réplicas independientes; no inferir causalidad de correlaciones agregadas.
-- [ ] Ejecutar el supervisado sobre el proxy completo cuando existan caches v3; acordar el lanzamiento de la curva focal. Propuesta previa: N=100/500/1000/5000/10000, CIFAR, IID/α=0.1/single, seeds 42/43/44, EXPERT-logit. Las cuentas de ejecuciones previas suponían reutilizar KD v2 y deben recalcularse para v3.
-- [ ] Añadir al notebook las curvas KD−supervisado y cualquier intervalo de cruce observado. No se conoce un tamaño suficiente ni un cruce; «rendimiento decente» necesita un criterio previo explícito.
-- [ ] Revisar posicionamiento bibliográfico y comparadores compatibles antes de añadir métodos.
-- [ ] Redactar el artículo desde las figuras: observación, interpretación compatible, claim defendible y limitación. Evitar equivalencia EXPERT/ORACLE, superioridad universal de logits o atribuir causalmente a dark knowledge cualquier pérdida con SR.
-- [ ] Reservar para estudios posteriores estimación de máscaras, proxy sin etiquetas y personalización con class_mask.
+### 10.1 Cerrar el labeled baseline que está en ejecución
 
-La separación de expertise evita su reutilización para seleccionar el checkpoint. No elimina la incertidumbre con pocos ejemplos, la dependencia de umbrales, el coste informacional de M+y ni el conocimiento previo de resultados del benchmark.
+La fase `baseline` del commit remoto e311558 ejecuta **54 condiciones × 10 métodos = 540 KD** a T=8, no las 324 del diseño mínimo. Su salida es `OUTPUTS/article1_v3/results_baseline.csv`. Dentro de cada condición empieza con FedDF-prob, EXPERT-prob, EXPERT-prob-SR y ORACLE-prob; después ejecuta seis métodos logit. No ejecuta primero todas las probabilidades de todas las condiciones. Teachers y máscaras se reutilizan.
+
+No actualizar el checkout desde el que está corriendo el proceso: el pipeline lanza subprocesses que importan archivos de disco y una actualización intermedia podría mezclar versiones. No se requiere interrumpir una KD sana por esta revisión. Si el proceso termina fallando solo en el notebook con `Unknown analysis stage: baseline`, sus filas KD ya escritas se conservan; actualizar y ejecutar el análisis basta, sin relanzar baseline.
+
+Se han corregido dos problemas de integración del estado remoto: faltaba `run_article1_grid.py` pese a ser importado y ejecutado por el pipeline, y `baseline` no estaba admitido por el cargador de análisis. Un checkout limpio de aquel commit no podía arrancar el pipeline sin el grid. Si una ejecución estaba avanzando, su copia local conservaba ese archivo o difería del snapshot remoto. Los targets y la receta KD no cambian en esta revisión.
+
+Después de que termine el entrenamiento:
+
+```bash
+# Desde cleanup/article1-base, con el proceso ya terminado:
+git pull --ff-only
+python -m article1.conditions
+python -m article1.audit OUTPUTS/article1_v3/results_baseline.csv --methods feddf_prob expert_prob expert_prob_sr oracle_prob feddf_logit confidence_logit consensus_logit energy_logit expert_logit oracle_logit
+
+# Validar las 540 filas y materializar los bloques/focal sin entrenar:
+python -m article1.baseline_results
+jupyter notebook notebooks/article1_definitive_analysis.ipynb
+```
+
+Seleccionar `STAGE="baseline"` en el notebook para revisar el conjunto completo. `article1.baseline_results` conserva el CSV maestro, exige integridad y crea los CSV de selección, pooling, expertise, soporte, controles y nueve EXPERT-logit focales con los mismos run_id. Si existe un destino diferente se detiene antes de escribir; no sobreescribe resultados conflictivos. La validación de CSV no sustituye la auditoría de caches anterior. No ejecutar el exportador mientras se escribe baseline, ni si faltan filas.
+
+- [ ] Verificar procedencia, presupuesto, emparejamiento por seeds y fallbacks; comprobar SR revisión 2. No afirmar que una ejecución remota está completa solo por lanzar el comando.
+- [ ] Analizar primero ORACLE-logit − FedDF-logit; después los contrastes de operador FedDF y ORACLE; después EXPERT-prob − FedDF-prob y gap a ORACLE-prob; finalmente SR − full support.
+- [ ] Con las 540 filas completas no repetir `rq1`, `aggregation`, `expertise`, `support` o `controls`: sus celdas ya están presentes. Tampoco hace falta entrenar de nuevo EXPERT-logit focal.
+- [ ] Ejecutar `--phase supervised --execute --device cuda` (nueve CE N=10000) y revisar la comparación con EXPERT-prob.
+- [ ] Después, ejecutar `--phase proxy-curve --execute --device cuda`: CIFAR, IID/alpha0p1/single, seeds 42/43/44 y N=100/500/1000/5000, con EXPERT-prob. Son 12 CE + 36 KD nuevas si no existen; reutiliza los puntos N=10000. Añadir su análisis gráfico al notebook antes de afirmar un cruce o un N suficiente.
+- [ ] `--phase temperature` queda como robustez focal opcional: reutiliza los nueve EXPERT-logit T=8 exportados y añade 36 KD T=1/4. No selecciona automáticamente una temperatura por test.
+- [ ] Cerrar las afirmaciones del estudio labeled antes de lanzar el experimento unlabeled descrito abajo. Clientes no son réplicas independientes; falta de significación no prueba equivalencia.
+
+### 10.2 Justificación del espacio probabilístico: alcance de las garantías
+
+Para el labeled proxy se mantiene `S_E(x)={k:M[k,y(x)]=1}` y `q_full=sum_k w_k p_k`, con pesos uniformes en S_E. Se conserva la distribución completa de cada experto para mantener relaciones interclase potencialmente útiles. Esto no demuestra que todo valor fuera de soporte sea dark knowledge válido ni que el enmascaramiento cause necesariamente peor generalización; esa es la pregunta de la ablación SR.
+
+Con pesos fijos, reemplazar la distribución de un teacher de peso w cambia cada coordenada del target como máximo w y su distancia L1 como máximo 2w. Acotar cada distribución evita que su norma de logits aumente directamente ese peso. **No proporciona invariancia a escala ni calibración**: escalar logits cambia su softmax, y un teacher muy confiado pero erróneo aún puede perjudicar el target. La cota no afirma que todos los gradientes de los parámetros del student estén acotados: también interviene su Jacobiano.
+
+El producto M*p requiere normalización para ser una distribución. Para SR labeled se usa softmax estable dentro del soporte; no se inyectan infinitos ni se descartan teachers por masa pequeña. El uso conceptual de -infinito como máscara antes de softmax no es intrínsecamente incorrecto o inestable. KL y entropía son aplicables también al target obtenido agregando logits y aplicando softmax; no constituyen una ventaja exclusiva de la media de probabilidades.
+
+Los marcadores `[cite: ...]` del texto de propuesta no identifican referencias verificables y no se incorporan como citas. El fundamento matemático anterior es una derivación; las afirmaciones empíricas quedan por contrastar.
+
+### 10.3 Propuesta futura: síntesis por clase con proxy sin etiquetas
+
+**Estado: propuesta a evaluar, no implementada ni activada en baseline.** Es una regla class-supported de contribución por coordenada, diferente del routing labeled por muestra. Usa M construida con etiquetas privadas de expertise, pero no la etiqueta pública y(x). Por tanto es "proxy unlabeled", no un sistema sin ninguna etiqueta.
+
+Definir `p_k(x;T)=softmax(z_k(x)/T)` con la misma temperatura para todos los teachers. Para cada clase c:
+
+\[
+E_c=\{k:M_{k,c}=1\},\qquad n_c=|E_c|.
+\]
+
+Cuando hay varios expertos, la propuesta base es promediar sus probabilidades **completas antes de la selección de coordenadas**:
+
+\[
+s_c(x)=
+\begin{cases}
+\frac{1}{n_c}\sum_{k\in E_c}p_{k,c}(x;T), & n_c>0,\\
+0,&n_c=0,
+\end{cases}
+\qquad
+q_c(x)=\frac{s_c(x)}{\sum_j s_j(x)}.
+\]
+
+Con un único experto por clase recupera la fórmula propuesta originalmente. Se denominan s_c "puntuaciones" antes de normalizar: no forman todavía una distribución común. La media evita introducir por construcción un prior proporcional al número de expertos: si A tiene dos expertos que emiten 0.8 y B uno que emite 0.8, sumar produciría (2/3,1/3); promediar por clase produce (1/2,1/2). Esto tampoco demuestra calibración entre clases.
+
+**No aplicar antes el SR por teacher del experimento labeled.** Si cada teacher solo conoce una clase, su softmax restringido es siempre one-hot, independiente de x. Al combinar un experto por clase se obtiene exactamente una distribución uniforme. Deben conservarse las probabilidades completas para extraer cada coordenada. Incluso así, si cada teacher ya emite aproximadamente 1 para su clase sobre cualquier entrada, la propuesta vuelve a producir casi uniforme: normalizar no crea información discriminativa.
+
+Casos que deben fijarse antes de implementar:
+
+- Si n_c=0, s_c=0 expresa falta de evidencia acreditada; no demuestra que la clase sea imposible. La versión estricta no puede darle masa al target. Para presentar una solución sobre todas las clases hay que exigir cobertura completa o declarar una variante explícita que complete clases sin expertos con una referencia; no hacerlo silenciosamente.
+- Si todas las puntuaciones son cero (M vacía o underflow), usar como fallback propuesto la media de probabilidades de todos los teachers y contabilizar el evento. Este sería un nuevo método con nueva identidad; no cambia el fallback FedDF-logit de los métodos labeled existentes.
+- Calcular las puntuaciones y la normalización con estabilidad numérica (por ejemplo logsumexp/log-softmax); no recuperar ceros numéricos con etiquetas reales. Una suma pequeña hace sensibles los cocientes a perturbaciones relativas. L1 asegura suma uno, no calibración ni calidad del target.
+
+**Limitación principal de M:** la accuracy por clase actual estima `P(pred=c | y=c)` sobre el expertise local. No estima `P(y=c | pred=c)`, especificidad ni rechazo OOD. Un teacher que siempre predice c puede tener 100% de aciertos en c y recibir M[k,c]=1. Eso basta para el criterio actual, pero no certifica que p[k,c](x) sea una señal fiable para distinguir c del resto. El labeled routing dispone de y(x); la nueva regla ya no tiene esa ayuda.
+
+Tampoco está garantizada la comparabilidad de puntuaciones entre especialistas entrenados con distintos priors locales. La normalización final no corrige ese desajuste. A T muy alta, las probabilidades completas tienden a 1/C: con cobertura completa la media por clase y L1 tienden a uniforme. La temperatura del protocolo labeled no debe suponerse óptima para esta extensión.
+
+### 10.4 Experimento de viabilidad unlabeled, después del estudio actual
+
+- [ ] Reutilizar teachers/logits/M congelados para un diagnóstico de targets sin reentrenar; mantener el nuevo método en un archivo e identidad independientes.
+- [ ] Implementar una API sin argumento labels para la construcción del target. Comprobar que permutar/eliminar y no cambia ni selección, ni target, ni fallback. Separar del código que usa etiquetas para medir calidad del target.
+- [ ] Comprobar expertos únicos/múltiples, clases sin experto, M vacía, masa casi nula, pesos y normalización; incluir single como caso de posible degeneración.
+- [ ] Comparar targets con FedDF-prob unlabeled y EXPERT-prob labeled como referencia informada (no como competidor de igual presupuesto informacional). Medir cobertura, fallbacks, accuracy/NLL/entropía, variación de s_c por muestra y señales constantes de cada especialista.
+- [ ] Investigar discriminación fuera de la clase acreditada con datos etiquetados de desarrollo independientes si se pretende ajustar M o calibración. No reutilizar test oficial para ese ajuste ni presentar un desarrollo que usó etiquetas públicas como si nunca las hubiera utilizado.
+- [ ] Solo si hay señal discriminativa, ejecutar una KD focal con seeds emparejadas; después ampliar. La evaluación final sigue en test oficial y no se modifica el experimento labeled en curso.
+
+La propuesta tiene una definición matemática válida una vez fijados expertos múltiples, cobertura y fallback. Su utilidad en alta especialización es una hipótesis, no una consecuencia de usar probabilidades.
 
 ## 11. Validación de esta revisión
 
@@ -341,3 +418,115 @@ Revisión del lanzador completo: 44 pruebas correctas, incluidos modo plan sin e
 Validación de la unificación por fases: 52 pruebas correctas; compilación del código y celdas del notebook correcta; lint correcto en los archivos modificados. No se han ejecutado entrenamientos reales en esta revisión.
 
 Validación del diseño mínimo probabilístico: 57 pruebas correctas y 8 omitidas por ausencia de PyTorch/torchvision; lint y compilación correctos. Se comprobaron los planes de todas las fases sin entrenar. Los tests nuevos cubren FedDF-prob, soporte de masa diminuta/underflow, fallback, revisión de identidades SR y máscaras no binarias. No se han ejecutado entrenamientos reales ni medido equivalencia empírica entre operadores.
+
+Validation de la revisión unlabeled/baseline: 59 pruebas correctas y 8 omitidas por ausencia de PyTorch/torchvision; compilación y lint correctos. Se verifican las 540 filas sintéticas, exportación idempotente sin entrenamiento, rechazo de destinos conflictivos y revisión SR por método. No se ha ejecutado ni implementado una KD unlabeled.
+
+### Rendimiento CUDA y MSI Pulse GL76
+
+Configuración confirmada por las salidas del equipo del 9 de septiembre de 2026:
+
+| Componente | Valor observado |
+|---|---|
+| Portátil | MSI Pulse GL76 (modelo indicado por el usuario) |
+| GPU | NVIDIA GeForce RTX 3060, 6144 MiB de VRAM |
+| Driver NVIDIA | 595.84 |
+| PyTorch | 2.9.1+cu128 |
+| Runtime CUDA de PyTorch | 12.8 |
+| cuDNN | 91002, valor devuelto por PyTorch |
+| Límite de potencia actual informado | 80 W |
+
+La cabecera CUDA 13.2 de `nvidia-smi` corresponde al soporte del driver;
+no sustituye al runtime CUDA 12.8 de PyTorch. Conservar este entorno que ya
+está entrenando. Estas consultas no confirman la RAM, el SSD ni el SKU completo
+del portátil. El pipeline imprime GPU, VRAM y versiones al ejecutar una fase CUDA.
+
+**Estado del código:** están aplicadas las optimizaciones conservadoras de
+transporte para esta GPU, compartidas entre teachers, CE y KD. Esto no certifica
+un máximo rendimiento ni equivalencia numérica entre commits en CUDA: ambos
+requieren medición local. El cambio de transporte pasó 67 pruebas con PyTorch
+2.9.1 CPU y torchvision 0.24.1 CPU, además de lint. No se ejecutó entrenamiento
+científico ni se midió CUDA desde el entorno de revisión.
+
+**Prioridad actual: estabilizar la refrigeración.** En las capturas del equipo
+se observaron 88–89 °C, objetivo térmico informado de 87 °C,
+`SW Thermal Slowdown: Active` y frecuencia SM/Graphics de 232 MHz. Esto confirma
+limitación térmica en ese instante; no cuantifica la pérdida de rendimiento
+sostenida. La primera captura mostró 99 % de utilización y 3089/6144 MiB ocupados:
+una GPU puede permanecer ocupada trabajando a frecuencias reducidas. Los
+contadores de eventos son acumulados y no deben atribuirse íntegramente al
+experimento actual. Véase la [documentación de NVIDIA](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
+
+Comprobar ventilación, entradas y salidas de aire y funcionamiento de ventiladores;
+medir con condiciones térmicas estables. Mantener un entrenamiento simultáneo.
+No aumentar potencia ni batch para ocupar la VRAM libre. La limitación térmica
+observada no exige por sí sola descartar resultados; registrar sus efectos al
+comparar tiempos de ejecución. Resolver esta limitación antes de atribuir una
+mejora de velocidad a workers, pinning u otros cambios de software.
+
+Optimizaciones de transporte aplicadas al runtime compartido CE/KD y teachers:
+
+| Archivo | Cambio | Motivo |
+|---|---|---|
+| `article1/runner.py` | `pin_memory` en el loader del proxy; copias H2D con `non_blocking=True` | Permitir transferencias desde memoria fijada sin esperar en el host tras cada copia |
+| `article1/runner.py` | Conservar solo la pérdida final separada del grafo; convertirla a `float` al terminar | Evitar una sincronización CPU/GPU por actualización |
+| `article1/local_training.py` | Copias H2D no bloqueantes; pinning según el dispositivo solicitado | Aplicar la misma política al entrenamiento y evaluación de teachers |
+| `article1/datasets.py` | Pinning del test solo cuando se evalúa en CUDA | Evitar fijar RAM al ejecutar explícitamente en CPU |
+| `run_article1_pipeline.py` | Mostrar dispositivo y versiones | Identificar el entorno real en el registro de ejecución |
+
+Los targets completos ya residen en el dispositivo durante KD. Se mantienen
+`num_workers=0`, batches, precisión FP32, RNG, optimizadores y algoritmos
+deterministas. Las copias GPU→CPU de logits siguen siendo bloqueantes antes de
+leer NumPy: convertirlas sin esperar podría leer datos incompletos.
+`pin_memory` más `non_blocking` no garantiza solapar transferencia y cómputo:
+se usa el mismo stream, y fijar memoria también tiene coste. No hay una mejora
+porcentual medida en el portátil. Véase la [guía oficial de PyTorch](https://docs.pytorch.org/tutorials/intermediate/pinmem_nonblock.html).
+
+Siguientes optimizaciones, por orden de evaluación:
+
+1. Medir tiempo por celda y utilización GPU en el equipo, separando carga inicial,
+   construcción de targets, entrenamiento y evaluación. Comparar condiciones
+   idénticas y varias repeticiones, con calentamiento y sincronización CUDA en los
+   límites de las mediciones. No comparar tiempos de métodos distintos como si
+   midieran el efecto de una optimización.
+2. Probar 0/2/4 workers en un benchmark separado. Más procesos no implica mayor
+   velocidad; CIFAR aplica transformaciones por muestra y el lanzamiento de workers
+   tiene coste. `persistent_workers` puede ahorrar reinicios, pero cambia el ciclo
+   de vida del RNG. En teachers también afecta al augmentation; en students hay
+   dropout. Antes de adoptarlo exigir las mismas huellas de batches y estados, o
+   declarar un cambio de receta. No activar workers globalmente a mitad del estudio.
+3. Evitar crear la vista aumentada de entrenamiento en cada ejecución del student
+   (`datasets_for` la construye y el runner la descarta). Después valorar cachear
+   el proxy ya transformado en RAM: 10.000 × 3 × 32 × 32 float32 son unos 117 MiB,
+   sin contar estructuras auxiliares. Esto requiere conservar índices, etiquetas,
+   transformaciones y huellas, y medir el coste inicial frente al ahorro por época.
+4. Reducir sincronizaciones por batch en evaluación y agrupar carga/inicialización
+   entre métodos solo si el perfil lo justifica. El aislamiento actual por proceso
+   simplifica la reanudación y evita estado compartido accidental.
+5. AMP, TF32, `channels_last`, `torch.compile`, optimizadores fusionados o cambios
+   de batch son pruebas posteriores de rendimiento. Pueden cambiar resultados
+   numéricos o la receta experimental; no se activan en las comparaciones actuales.
+
+Para identificar y observar tu GPU sin modificar el experimento:
+
+```bash
+nvidia-smi
+nvidia-smi -q -d PERFORMANCE,TEMPERATURE,POWER,CLOCK
+nvidia-smi --query-gpu=timestamp,temperature.gpu,utilization.gpu,clocks.sm,power.draw --format=csv -l 2
+```
+
+La disponibilidad de sensores depende del driver. Medir conectado a corriente y
+con condiciones térmicas estables; no lanzar varios entrenamientos simultáneos
+sin medir contención de GPU/VRAM. Conservar el entorno CUDA que ya funciona.
+
+Si `--phase baseline --execute` sigue activo, **esperar a que termine antes de
+actualizar su checkout**: el pipeline arranca subprocesos que leerían el nuevo
+código. Después de actualizar, comprobar reproducción en un CSV separado antes
+de continuar. La comprobación siguiente repite una celda; no demuestra por sí
+sola equivalencia con el commit anterior. Para comparar commits, ejecutar esa
+misma celda con el mismo entorno en dos checkouts y comparar las huellas finales:
+
+```bash
+python -m article1.reproduce --dataset mnist --seed 42 --method expert_prob --cache OUTPUTS/article1_v3/sources/mnist-seed42-iid/teacher_cache.npz --results OUTPUTS/article1_v3/cuda_io_repro.csv --device cuda
+```
+
+No se han medido tiempos ni equivalencia CUDA en el MSI desde este entorno.

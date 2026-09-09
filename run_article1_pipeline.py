@@ -266,6 +266,14 @@ def main():
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but unavailable")
+        dev = torch.device(args.device)
+        props = torch.cuda.get_device_properties(dev)
+        print(
+            f"CUDA device: {props.name}; VRAM: {props.total_memory / 2**30:.1f} GiB; "
+            f"PyTorch: {torch.__version__}; CUDA runtime: {torch.version.cuda}; "
+            f"cuDNN: {torch.backends.cudnn.version()}",
+            flush=True,
+        )
     if phase == "partitions":
         run(
             "-m",
