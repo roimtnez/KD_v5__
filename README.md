@@ -673,3 +673,42 @@ student. Véase [hipótesis y estudios pendientes](docs/article1_paper/hypothese
 La comparación inicial muestra medias recuperadas de anclas absolutas y diferencias
 emparejadas; no inventa SD de métodos. La curva CE cuenta 15 ejecuciones únicas.
 Las tablas originales y la receta de entrenamiento permanecen intactas.
+
+### Completar FedDF-prob frente a EXPERT-prob por tamaño de proxy
+
+`run_article1_feddf_curve.py` prepara exclusivamente **36 nuevos FedDF-prob**:
+CIFAR × IID/alpha0p1/single × seeds 42/43/44 × N=100/500/1000/5000.
+La instantánea completa confirma nueve EXPERT-prob por tamaño reducido, entrenados
+con esos subconjuntos. Se reutilizan sus 36 ejecuciones y las nueve de N=10000;
+los nueve FedDF-prob de N=10000 se reutilizan del baseline. No se relanza CE.
+
+Desde el checkout independiente, revisar el plan (no entrena ni escribe salidas):
+
+```bash
+/home/roi/miniconda3/envs/FLWR/bin/python run_article1_feddf_curve.py \
+  --snapshot /tmp/article1-closure-output/20260909T214849851047Z \
+  --source-root /home/roi/PycharmProjects/KD_v5/OUTPUTS/article1_v3 \
+  --data-dir /home/roi/PycharmProjects/KD_v5/data \
+  --output-root /tmp/article1-feddf-curve \
+  --device cpu
+```
+
+Para lanzar cuando se decida, repetir añadiendo **`--execute`**. La opción
+`--device` permite elegir el dispositivo; el valor por defecto es CPU. Este
+lanzador no se ha ejecutado en modo entrenamiento durante su preparación.
+No usar una segunda instancia concurrente sobre el mismo directorio de salida.
+
+El lanzador verifica hashes de CSV de la instantánea y de los nueve caches
+originales, referencias únicas y válidas, receta y CRN. Usa el runner existente,
+T=8, 1200 actualizaciones y batch nominal 256 (efectivo 100 para N=100), con
+los mismos subconjuntos anidados. Ejecuta secuencialmente y escribe únicamente
+`<output-root>/results_proxy_size_feddf_prob.csv` y manifiestos `launch_*.json`.
+No toca los CSV originales, teachers, particiones ni la cola del pipeline.
+La reanudación valida los resultados existentes y omite solo identidades
+compatibles; tras cada ejecución comprueba el emparejamiento con EXPERT.
+
+El contraste posterior será EXPERT-prob − FedDF-prob, accuracy/NLL por tamaño y
+régimen, con tres diferencias por seed y SD muestral. Esta extensión es una pregunta
+pendiente distinta de la curva CE/EXPERT ya cerrada; no se añade silenciosamente al
+inventario original de 60 ejecuciones. El CSV nuevo y las referencias N=10000 deberán
+incorporarse a una nueva instantánea antes del análisis de esos 45 pares.
