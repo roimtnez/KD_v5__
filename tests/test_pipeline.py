@@ -104,3 +104,15 @@ def test_minimal_sequence_excludes_optional_full_grids(monkeypatch, capsys):
     assert "--phase expertise --execute" in plan
     assert "--phase controls --execute" not in plan
     assert "--phase temperature --execute" not in plan
+
+
+def test_presence_is_separate_and_never_retrains_teachers(monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['pipeline', '--phase', 'presence'])
+    monkeypatch.setattr(pipeline.subprocess, 'run', lambda *a, **k: pytest.fail('Plan must not execute'))
+    pipeline.main()
+    plan = capsys.readouterr().out
+    assert plan.count('article1.runner distill') == 54
+    assert plan.count('--method presence_prob') == 54
+    assert 'results_presence.csv' in plan and 'article1.presence' in plan
+    assert '--stage teachers' not in plan
+    assert '--method expert_prob_sr' not in plan

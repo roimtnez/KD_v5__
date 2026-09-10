@@ -2,7 +2,6 @@
 from itertools import product
 from pathlib import Path
 import json
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from article1 import DATASETS, REGIMES, SEEDS

@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 from article1 import DATASETS, PROTOCOL_VERSION, REGIMES, SEEDS
 from article1.datasets import datasets_for, labels_of, test_loader
 from article1.distillation import (
+    CONTROL_METHODS,
     METHODS,
     build_target,
     kd_config,
@@ -306,6 +307,14 @@ def distill(
     )
     with np.load(cache, allow_pickle=False) as data:
         logits, mask = data["logits"][positions], data["M"]
+    routing_info = {}
+    if method == "presence_prob":
+        from article1.presence import load_presence
+
+        _, evaluation_data, _ = datasets_for(dataset, data_dir)
+        expertise_hash = array_sha256(mask)
+        mask, routing_info = load_presence(cache, metadata, labels_of(evaluation_data))
+        routing_info["expertise_M_sha256"] = expertise_hash
     config = kd_config(epochs, batch_size)
     total_updates = epochs * ((len(indices) + batch_size - 1) // batch_size)
     if updates is not None:
@@ -355,6 +364,7 @@ def distill(
         **info,
         **trained,
         **target.metrics,
+        **routing_info,
     }
     _update_table(Path(results), row)
     return row
@@ -451,7 +461,7 @@ def main() -> None:
     d.add_argument("--cache", type=Path, required=True)
     d.add_argument("--data-dir", type=Path, default=Path("data"))
     d.add_argument("--results", type=Path, required=True)
-    d.add_argument("--method", choices=METHODS, required=True)
+    d.add_argument("--method", choices=METHODS + CONTROL_METHODS, required=True)
     d.add_argument("--temperature", type=float, default=8.0)
     budget = d.add_mutually_exclusive_group()
     budget.add_argument("--epochs", type=int, default=30)

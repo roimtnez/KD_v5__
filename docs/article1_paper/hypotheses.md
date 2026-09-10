@@ -7,8 +7,8 @@ Evidence: published closure snapshot, 2026-09-09 21:48 UTC. All statements below
 | H1. Selection helps under specialization | EXPERT-prob−uniform CIFAR: −0.08 pp IID, +28.56 alpha0p1, +69.29 single | Absolute overview of six methods + CE; paired routing effects alongside it | Distinguish label/M information from a causal effect of specialization alone |
 | H2. Class expertise can approach sample-wise ORACLE | Small gaps in several conditions; CIFAR alpha0p1 ORACLE−EXPERT = −4.06 pp | Paired ORACLE−EXPERT effects with zero line, accuracy and NLL | ORACLE is not an upper bound; proximity is not equivalence |
 | H3. Pooling space may be interchangeable at T=8 | Not supported generally: FedDF-prob gains +12.54 pp over logit in CIFAR alpha0p1 | Separate prob−logit panels for FedDF and ORACLE | Direct EXPERT comparison has 41/54 pairs; 13 missing; temperature robustness not closed |
-| H4. Restriction removes unhelpful out-of-support predictions | Target NLL falls; does not imply student improvement | Three aligned rows: Δtarget NLL, Δstudent accuracy, Δstudent NLL | Avoid generalizing the direction of student effects across datasets |
-| H5. Full outputs contain useful dark knowledge | Compatible with CIFAR SR losses; mechanism not identified | Support triptych, all regimes, paired mean ± SD | Confidence/concentration also change; consider full-support entropy-matched control as a future diagnostic |
+| H4. Restriction removes unhelpful out-of-support predictions | Target NLL falls; does not imply student improvement | Five aligned rows: target accuracy/NLL/entropy and student accuracy/NLL | Avoid generalizing the direction of student effects across datasets |
+| H5. Full outputs contain useful dark knowledge | Compatible with CIFAR SR losses; mechanism not identified | Target/student panels and observed outside-mask mass, paired mean ± SD | Confidence/concentration also change; consider full-support entropy-matched control as a future diagnostic |
 | H6. KD adds value beyond public labels | At N=10000 CIFAR mean accuracy is lower than CE in every regime | Absolute overview and EXPERT−CE paired effects | Different objectives CE/KD; does not isolate private knowledge alone |
 | H7. Utility depends on public-label budget | CIFAR IID gain +10.88 pp at N=500, −3.73 at N=10000 | CE-only absolute curve, then KD−CE curve, both accuracy and NLL | CIFAR only; no optimal N or continuous crossover estimated |
 | H8. Mask quality/coverage explains benefits | Coverage, supports and fallback are recorded | M/count heatmaps, experts per class, descriptive coverage vs effect | No causal identification; thresholds fixed; compare measured expertise vs training-class presence if claiming value of calibration |
@@ -64,3 +64,12 @@ CIFAR-only data-budget curve, 15 unique CE runs; three seeds and mean ± sample 
 SR−full, all 18 dataset/regime groups, three paired seeds each. Rows use separate metrics and scales: target NLL on proxy at T=8; student accuracy; student NLL on test at T=1. Bars are sample SD, not confidence intervals or a causal test.
 
 Validation: 87 tests passed, eight runtime tests skipped because torch/torchvision are unavailable. New Python files pass lint. All notebook code cells executed sequentially in IPython; no external Jupyter kernel was used. All three new figures were visually inspected. The full notebook exports 12 figures in PNG/PDF and six CSV tables. No experiments were trained or original result files modified.
+
+## Actualización: control de presencia implementado
+
+`presence_prob` y la fase `presence` ya permiten ejecutar el control sobre train.
+Todavía no hay resultados de este nuevo brazo: la hipótesis de ventaja de medir
+competencia permanece abierta. Véase [protocolo y comandos](presence_control.md).
+El notebook sustituye las estimaciones de masa externa por métricas observadas y
+separa el efecto en targets del efecto en students, sin atribución causal automática
+a dark knowledge.

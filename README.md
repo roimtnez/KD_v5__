@@ -1,3 +1,25 @@
+## Control de presencia y revisión Target vs Student
+
+Ya está implementado `presence_prob`: selecciona por presencia de clase en **train**,
+conservando el pooling probabilístico completo de EXPERT. Permite comparar medir
+competencia con conocer el soporte de entrenamiento. Es un control pendiente de
+resultados: 54 KD adicionales, sin nuevos teachers ni cambios en caches históricos.
+
+```bash
+python run_article1_pipeline.py --phase presence                 # plan
+python run_article1_pipeline.py --phase presence --execute --device cuda
+```
+
+Genera `OUTPUTS/article1_v3/results_presence.csv` y `presence_pairs.csv`. Requiere los
+54 EXPERT de N=10000 compatibles con el baseline. No se lanza automáticamente con
+las fases existentes; ejecútalo después de la cola GPU actual.
+
+El notebook editorial corrige el signo a **SR − EXPERT**, elimina estimaciones
+inventadas de masa fuera de expertise y muestra target accuracy/NLL/entropía junto a
+student accuracy/NLL. Las figuras de contrastes funcionan con las tablas públicas;
+las métricas absolutas y la masa observada necesitan el CSV auditado local, que se
+comprueba contra el cierre. Véase [diseño, ejecución y limpieza](docs/article1_paper/presence_control.md).
+
 # KD_v5__ — Article 1
 
 Repositorio pequeño de investigación sobre **one-shot federated knowledge distillation**. El objetivo es determinar qué aporta una máscara de competencia cliente–clase y cómo deben contribuir los expertos al target del estudiante global.
@@ -14,7 +36,7 @@ no sustituyen este estado ni implican que debamos volver a entrenar.
 
 **Para redactar:** abrir [article1_paper.ipynb](notebooks/article1_paper.ipynb).
 Funciona desde un checkout limpio con las tablas públicas de `docs/article1_closure/`,
-sin caches privados ni CUDA; exporta figuras y tablas a `OUTPUTS/article1_paper/`.
+sin caches privados ni CUDA para los contrastes públicos; los diagnósticos absolutos requieren el CSV auditado local. Exporta a `OUTPUTS/article1_paper/`.
 Muestra media ± SD para resúmenes y seeds reales solo donde están publicadas.
 La reconstrucción editorial no reemplaza la auditoría original de modelos.
 
