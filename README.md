@@ -10,6 +10,8 @@ Véanse el [informe de cierre](docs/article1_closure/report.md) y el
 [plan del artículo](docs/article1_paper/plan.md). Las secciones históricas posteriores
 no sustituyen este estado ni implican que debamos volver a entrenar.
 
+**Primer manuscrito:** [borrador en inglés v0.1](docs/article1_paper/manuscript.md), con método, protocolo, resultados, discusión y mapa de evidencia. Related Work y tablas absolutas pendientes antes del envío.
+
 **Para redactar:** abrir [article1_paper.ipynb](notebooks/article1_paper.ipynb).
 Funciona desde un checkout limpio con las tablas públicas de `docs/article1_closure/`,
 sin caches privados ni CUDA; exporta figuras y tablas a `OUTPUTS/article1_paper/`.
