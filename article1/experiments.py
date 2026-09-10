@@ -11,10 +11,6 @@ BASELINE_METHODS = (
     "oracle_prob",
     "feddf_logit",
     "oracle_logit",
-    # "confidence_logit",
-    # "consensus_logit",
-    # "energy_logit",
-    # "expert_logit",
 )
 
 RQ1_METHODS = ("feddf_logit", "oracle_logit")
@@ -44,6 +40,7 @@ PHASES = (
     "support",
 )
 OPTIONAL_PHASES = (
+    "presence",
     "baseline",
     "controls",
     "expert-logit",

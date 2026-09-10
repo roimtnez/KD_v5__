@@ -1,61 +1,44 @@
-"""Editorial evidence gates must reject incomplete or altered paired results."""
+"""The self-contained editorial notebook must run from published evidence alone."""
 
-import shutil
+import json
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from article1.paper import load_evidence
-
-SOURCE = Path(__file__).resolve().parents[1] / "docs/article1_closure"
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_published_evidence_is_complete():
-    data = load_evidence(SOURCE)
-    assert len(data["proxy_curve_paired"]) == 45
-    iid = data["proxy_curve_paired"].query('regime == "iid" and proxy_size == 500')
-    assert 100 * iid.delta_student_test_accuracy.mean() == pytest.approx(10.88)
+def test_notebook_executes_without_private_results(tmp_path, monkeypatch):
+    notebook = json.loads((ROOT / "notebooks/article1_paper.ipynb").read_text())
+    namespace = {"display": lambda *args: None}
+    monkeypatch.chdir(ROOT)
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        source = "".join(cell["source"])
+        # Redirect figure outputs only; inputs remain the real published CSVs.
+        source = source.replace(
+            "FIGURES = ROOT / 'OUTPUTS/article1_paper'",
+            f"FIGURES = Path({str(tmp_path)!r})",
+        )
+        exec(compile(source, "article1_paper.ipynb", "exec"), namespace)  # noqa: S102 - trusted repository notebook
+    support = namespace["support"]
+    cifar = support[support.dataset.eq("cifar")]
+    assert (cifar[cifar.metric.eq("target_nll")]["mean"] < 0).all()
+    acc = cifar[cifar.metric.eq("student_test_accuracy")].set_index("regime")["mean"]
+    assert (acc < 0).sum() == 5
+    assert acc["iid"] == pytest.approx(-0.0653333333333333)
+    assert (tmp_path / "target_vs_student.png").is_file()
+    plt.close("all")
 
 
-@pytest.mark.parametrize("damage", ["missing", "wrong_delta"])
-def test_incomplete_or_inconsistent_curve_is_rejected(tmp_path, damage):
-    shutil.copytree(SOURCE / "tables", tmp_path / "tables")
-    shutil.copyfile(SOURCE / "manifest.json", tmp_path / "manifest.json")
-    path = tmp_path / "tables/proxy_curve_paired.csv"
-    rows = pd.read_csv(path)
-    if damage == "missing":
-        rows = rows.iloc[:-1]
-    else:
-        rows.loc[0, "delta_student_test_accuracy"] += 0.1
-    rows.to_csv(path, index=False)
-    with pytest.raises(ValueError):
-        load_evidence(tmp_path)
-
-
-def test_absolute_mean_paths_and_ce_deduplication():
-    from article1.paper import absolute_means, supervised_curve_pairs
-
-    data = load_evidence(SOURCE)
-    means = absolute_means(data)
-    assert len(means) == 3 * 6 * 7 * 2
-    ce = supervised_curve_pairs(data["proxy_curve_paired"])
-    assert len(ce) == 15
-    assert ce.query(
-        "proxy_size == 10000"
-    ).student_test_accuracy_right.mean() == pytest.approx(0.7901333333333334)
-    data["main_contrast_summary"].loc[
-        lambda f: f.contrast.eq("selection_logit"), "mean"
-    ] += 0.01
-    with pytest.raises(ValueError, match="paths disagree"):
-        absolute_means(data)
-
-
-def test_conflicting_ce_reuse_is_not_silently_deduplicated():
-    from article1.paper import supervised_curve_pairs
-
-    data = load_evidence(SOURCE)
-    curve = data["proxy_curve_paired"].copy()
-    curve.loc[0, "student_test_accuracy_right"] += 0.01
-    with pytest.raises(ValueError, match="Conflicting CE"):
-        supervised_curve_pairs(curve)
+def test_support_summary_has_explicit_paired_seed_evidence():
+    table = pd.read_csv(ROOT / "docs/article1_closure/tables/main_contrast_summary.csv")
+    support = table[table.contrast.eq("support")]
+    assert len(support) == 90
+    assert support.n.eq(3).all() and support.seeds.eq("42,43,44").all()

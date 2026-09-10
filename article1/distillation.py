@@ -23,6 +23,7 @@ METHODS = (
     "expert_prob_sr",
     "oracle_prob",
 )
+CONTROL_METHODS = ("presence_prob",)
 EPS = 1e-12
 
 
@@ -122,9 +123,9 @@ def _routing(
     if method == "consensus_logit":
         vote = softmax(z, 1.0).mean(axis=1).argmax(axis=1)
         selected = z.argmax(axis=2) == vote[:, None]
-    elif method.startswith("expert"):
+    elif method.startswith("expert") or method == "presence_prob":
         if m is None:
-            raise ValueError(f"{method} requires M estimated from expertise")
+            raise ValueError(f"{method} requires a routing mask")
         selected = m[:, y].T.astype(bool)
     elif method.startswith("oracle"):
         selected = z.argmax(axis=2) == y[:, None]
@@ -153,8 +154,8 @@ def build_target(
     then renormalizes it.  A zero-M row is safe when that teacher is unselected;
     selecting it is impossible because it lacks M[k,y].
     """
-    if method not in METHODS:
-        raise ValueError(f"unknown method {method!r}; expected one of {METHODS}")
+    if method not in METHODS + CONTROL_METHODS:
+        raise ValueError(f"unknown method {method!r}; expected one of {METHODS + CONTROL_METHODS}")
     z, y, m = _validate(logits, labels, mask)
     weights, selected, weight_rule = _routing(method, z, y, m)
     fallback = selected.sum(axis=1) == 0

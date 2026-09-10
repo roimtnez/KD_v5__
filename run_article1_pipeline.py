@@ -354,7 +354,54 @@ def main():
     else:
         if args.execute:
             check_sources()
-        if phase == "baseline":
+        if phase == "presence":
+            # Separate control; reuse teachers and preserve the six-arm baseline.
+            expert_results = OUT / "results_baseline.csv"
+            if args.execute:
+                import pandas as pd
+
+                from article1.presence import check_expert_references
+
+                if not expert_results.is_file():
+                    expert_results = OUT / "results_expertise.csv"
+                check_expert_references(pd.read_csv(expert_results), OUT / "sources")
+            for dataset in DATASETS:
+                for seed in SEEDS:
+                    for regime in REGIMES:
+                        runner(
+                            "distill",
+                            "--dataset",
+                            dataset,
+                            "--seed",
+                            seed,
+                            "--cache",
+                            OUT
+                            / "sources"
+                            / f"{dataset}-seed{seed}-{regime}"
+                            / "teacher_cache.npz",
+                            "--method",
+                            "presence_prob",
+                            "--temperature",
+                            8,
+                            "--epochs",
+                            30,
+                            "--batch-size",
+                            256,
+                            "--results",
+                            OUT / "results_presence.csv",
+                            "--skip-existing",
+                        )
+            run(
+                "-m",
+                "article1.presence",
+                "--results",
+                OUT / "results_presence.csv",
+                "--expert",
+                expert_results,
+                "--output",
+                OUT / "presence_pairs.csv",
+            )
+        elif phase == "baseline":
             # Keep this ordering explicit: full baseline runs are long, and
             # probability-space methods must be executed before logit-space ones.
             grid(

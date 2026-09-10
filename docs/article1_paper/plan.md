@@ -71,7 +71,7 @@ Mapa: problema → mecanismo propuesto, no causalidad empírica demostrada; dise
 
 ## Figuras y tablas para escribir
 
-Notebook editorial: `notebooks/article1_paper.ipynb`. Lee tablas públicas versionadas, no requiere `ARTICLE1_SNAPSHOT` ni datasets/checkpoints.
+Notebook editorial: `notebooks/article1_paper.ipynb`. Lee tablas públicas versionadas para contrastes; los diagnósticos absolutos y la masa externa requieren el CSV auditado local. No requiere datasets/checkpoints.
 
 - Routing: ORACLE−FedDF y EXPERT−FedDF por dataset/régimen, accuracy y NLL.
 - Operador: prob−logit para FedDF y ORACLE, con T=8 explícita.
