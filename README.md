@@ -663,3 +663,13 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MPLCONFIGDIR=/tmp/article1-matplotlib \
   tests/test_analysis_stages.py tests/test_progress.py \
   tests/test_budget_analysis.py tests/test_probability_design.py
 ```
+
+### Figuras solicitadas para la redacción
+
+`notebooks/article1_paper.ipynb` incluye ahora una comparación absoluta inicial de los
+seis métodos KD completos con CE N=10000, una curva CIFAR exclusivamente supervisada,
+y tres paneles alineados para SR−full: NLL del target, accuracy del student y NLL del
+student. Véase [hipótesis y estudios pendientes](docs/article1_paper/hypotheses.md).
+La comparación inicial muestra medias recuperadas de anclas absolutas y diferencias
+emparejadas; no inventa SD de métodos. La curva CE cuenta 15 ejecuciones únicas.
+Las tablas originales y la receta de entrenamiento permanecen intactas.

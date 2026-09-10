@@ -173,6 +173,254 @@ def curve_figure(curve: pd.DataFrame):
     return fig
 
 
+def absolute_means(data: dict) -> pd.DataFrame:
+    """Recover means using linearity on identical paired seeds, never recover SD."""
+    main = data["main_contrast_summary"]
+    anchors = data["private_knowledge_summary"]
+    records = []
+    for dataset, regime, metric in product(
+        DATASETS, REGIMES, ("student_test_accuracy", "student_test_nll")
+    ):
+
+        def value(frame, key, dataset=dataset, regime=regime):
+            rows = frame[
+                frame.dataset.eq(dataset)
+                & frame.regime.eq(regime)
+                & frame.metric.eq(key)
+            ]
+            if (
+                len(rows) != 1
+                or rows.iloc[0]["n"] != 3
+                or rows.iloc[0]["seeds"] != "42,43,44"
+            ):
+                raise ValueError(
+                    "Absolute means require identical three-seed summaries"
+                )
+            result = float(rows.iloc[0]["mean"])
+            if not np.isfinite(result):
+                raise ValueError("Nonfinite absolute mean input")
+            return result
+
+        def delta(contrast, metric=metric, value=value):
+            return value(main[main.contrast.eq(contrast)], metric)
+
+        expert = value(anchors, metric + "_left")
+        ce = value(anchors, metric + "_right")
+        if not np.isclose(
+            expert - ce, value(anchors, "delta_" + metric), atol=1e-10, rtol=1e-10
+        ):
+            raise ValueError("CE anchor and paired difference disagree")
+        uniform_prob = expert - delta("expertise_gain")
+        uniform_logit = uniform_prob - delta("feddf_pooling")
+        oracle_prob = expert + delta("oracle_expertise_gap")
+        oracle_logit = oracle_prob - delta("oracle_pooling")
+        if not np.isclose(
+            oracle_logit - uniform_logit,
+            delta("selection_logit"),
+            atol=1e-10,
+            rtol=1e-10,
+        ):
+            raise ValueError("Independent pooling/selection paths disagree")
+        means = {
+            "feddf_logit": uniform_logit,
+            "feddf_prob": uniform_prob,
+            "oracle_logit": oracle_logit,
+            "oracle_prob": oracle_prob,
+            "expert_prob": expert,
+            "expert_prob_sr": expert + delta("support"),
+            "supervised_proxy_ce": ce,
+        }
+        for method, mean in means.items():
+            if mean < -1e-10 or (metric.endswith("accuracy") and mean > 1 + 1e-10):
+                raise ValueError("Reconstructed mean outside metric range")
+            records.append(
+                {
+                    "dataset": dataset,
+                    "regime": regime,
+                    "method": method,
+                    "metric": metric,
+                    "mean": mean,
+                    "n": 3,
+                    "seeds": "42,43,44",
+                    "source": "published absolute anchor"
+                    if method in ("expert_prob", "supervised_proxy_ce")
+                    else "absolute anchor plus paired mean differences",
+                }
+            )
+    result = pd.DataFrame(records)
+    for _, rows in result[result.method.eq("supervised_proxy_ce")].groupby(
+        ["dataset", "metric"]
+    ):
+        if not np.allclose(rows["mean"], rows["mean"].iloc[0], atol=1e-12, rtol=1e-12):
+            raise ValueError("CE reference differs across private regimes")
+    return result
+
+
+def overview_figure(means):
+    methods = {
+        "feddf_logit": ("FedDF-logit", "#7f7f7f", "--"),
+        "feddf_prob": ("FedDF-prob", "#7f7f7f", "-"),
+        "oracle_logit": ("ORACLE-logit", "#9467bd", "--"),
+        "oracle_prob": ("ORACLE-prob", "#9467bd", "-"),
+        "expert_prob": ("EXPERT-prob", "#0072B2", "-"),
+        "expert_prob_sr": ("EXPERT-prob-SR", "#D55E00", "-"),
+        "supervised_proxy_ce": ("CE (N=10000)", "#111111", ":"),
+    }
+    fig, axes = plt.subplots(2, 3, figsize=(12, 7), squeeze=False)
+    for j, dataset in enumerate(DATASETS):
+        for i, (metric, scale, label) in enumerate(
+            (
+                ("student_test_accuracy", 100, "Test accuracy (%) ↑"),
+                ("student_test_nll", 1, "Test NLL ↓"),
+            )
+        ):
+            ax = axes[i, j]
+            for method, (name, color, style) in methods.items():
+                rows = means[
+                    means.dataset.eq(dataset)
+                    & means.metric.eq(metric)
+                    & means.method.eq(method)
+                ]
+                rows = rows.set_index("regime").loc[list(REGIMES)]
+                ax.plot(
+                    range(6),
+                    rows["mean"] * scale,
+                    label=name,
+                    color=color,
+                    linestyle=style,
+                    marker=None if method == "supervised_proxy_ce" else "o",
+                    markersize=3,
+                )
+            ax.set_title(NAMES[dataset])
+            ax.set_ylabel(label)
+            ax.set_xticks(range(6), REGIME_LABELS, rotation=25)
+            if i == 0:
+                ax.set_ylim(0, 100)
+            else:
+                ax.set_ylim(bottom=0)
+            ax.grid(axis="y", alpha=0.2)
+            ax.spines[["top", "right"]].set_visible(False)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=4, fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    return fig
+
+
+def supervised_curve_pairs(curve):
+    """CE is repeated across regimes; reject conflicts before counting it once."""
+    cols = [
+        "seed",
+        "proxy_size",
+        "run_id_right",
+        "student_test_accuracy_right",
+        "student_test_nll_right",
+    ]
+    ce = curve[cols].copy()
+    if ce.isna().any().any():
+        raise ValueError("Incomplete supervised curve references")
+    for _, rows in ce.groupby(["seed", "proxy_size"]):
+        if rows.run_id_right.nunique() != 1 or not np.allclose(
+            rows[["student_test_accuracy_right", "student_test_nll_right"]],
+            rows[["student_test_accuracy_right", "student_test_nll_right"]].iloc[0],
+            atol=1e-12,
+            rtol=1e-12,
+        ):
+            raise ValueError("Conflicting CE references across regimes")
+    ce = ce.drop_duplicates(["seed", "proxy_size"]).sort_values(["seed", "proxy_size"])
+    if len(ce) != 15 or set(zip(ce.seed, ce.proxy_size)) != set(
+        product((42, 43, 44), (100, 500, 1000, 5000, 10000))
+    ):
+        raise ValueError("Expected 15 unique CE runs")
+    return ce
+
+
+def supervised_figure(ce):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
+    for ax, (metric, scale, label) in zip(
+        axes,
+        (
+            ("student_test_accuracy_right", 100, "Test accuracy (%) ↑"),
+            ("student_test_nll_right", 1, "Test NLL ↓"),
+        ),
+    ):
+        for seed, rows in ce.groupby("seed"):
+            ax.plot(rows.proxy_size, rows[metric] * scale, alpha=0.5, label=str(seed))
+        summary = ce.groupby("proxy_size")[metric].agg(["mean", "std"])
+        ax.errorbar(
+            summary.index,
+            summary["mean"] * scale,
+            yerr=summary["std"] * scale,
+            fmt="o-",
+            color="black",
+            capsize=3,
+            label="Mean ± SD",
+        )
+        ax.set_xscale("log")
+        ax.set_xticks(
+            [100, 500, 1000, 5000, 10000], ["100", "500", "1000", "5000", "10000"]
+        )
+        ax.tick_params(axis="x", labelrotation=25)
+        ax.set_xlabel("Labeled proxy examples N")
+        ax.set_ylabel(label)
+        ax.set_title("CIFAR-10 | supervised only")
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def support_diagnostics(main):
+    metrics = ("target_nll", "student_test_accuracy", "student_test_nll")
+    rows = main[main.contrast.eq("support") & main.metric.isin(metrics)].copy()
+    expected = set(product(DATASETS, REGIMES, metrics))
+    if (
+        len(rows) != 54
+        or set(map(tuple, rows[["dataset", "regime", "metric"]].values)) != expected
+    ):
+        raise ValueError("Incomplete target/student support diagnostics")
+    if not (
+        rows.n.eq(3).all()
+        and rows.seeds.eq("42,43,44").all()
+        and np.isfinite(rows[["mean", "sd"]]).all().all()
+        and rows.sd.ge(0).all()
+    ):
+        raise ValueError("Invalid support summaries")
+    return rows
+
+
+def support_diagnostic_figure(rows):
+    fig, axes = plt.subplots(3, 3, figsize=(11, 8.2), squeeze=False)
+    metrics = (
+        ("target_nll", 1, "Δ target NLL (proxy, T=8) ↓"),
+        ("student_test_accuracy", 100, "Δ student test accuracy (pp) ↑"),
+        ("student_test_nll", 1, "Δ student test NLL (T=1) ↓"),
+    )
+    for i, (metric, scale, label) in enumerate(metrics):
+        for j, dataset in enumerate(DATASETS):
+            ax = axes[i, j]
+            part = (
+                rows[rows.dataset.eq(dataset) & rows.metric.eq(metric)]
+                .set_index("regime")
+                .loc[list(REGIMES)]
+            )
+            ax.errorbar(
+                range(6),
+                part["mean"] * scale,
+                yerr=part.sd * scale,
+                fmt="o",
+                capsize=3,
+                color="#0072B2",
+            )
+            ax.axhline(0, color="0.5", linewidth=0.8)
+            ax.set_xticks(range(6), REGIME_LABELS, rotation=25)
+            ax.set_ylabel(label, fontsize=9)
+            ax.set_title(NAMES[dataset] + " | SR − full", fontsize=10)
+            ax.spines[["top", "right"]].set_visible(False)
+            ax.grid(axis="y", alpha=0.2)
+    fig.tight_layout()
+    return fig
+
+
 def export_paper(source: Path, output: Path) -> dict:
     source, output = Path(source).resolve(), Path(output).resolve()
     if output == source or source in output.parents or output in source.parents:
@@ -191,7 +439,17 @@ def export_paper(source: Path, output: Path) -> dict:
         },
         "support": {"support": "EXPERT: SR − full"},
     }
-    figs = {}
+    means = absolute_means(data)
+    ce_pairs = supervised_curve_pairs(data["proxy_curve_paired"])
+    support = support_diagnostics(main)
+    figs = {
+        "overview_absolute": overview_figure(means),
+        "supervised_only_curve": supervised_figure(ce_pairs),
+        "support_target_student": support_diagnostic_figure(support),
+    }
+    means.to_csv(output / "absolute_method_means.csv", index=False)
+    ce_pairs.to_csv(output / "supervised_only_pairs.csv", index=False)
+    support.to_csv(output / "support_target_student.csv", index=False)
     for name, mapping in panels.items():
         for metric in ("student_test_accuracy", "student_test_nll"):
             figs[f"{name}_{metric}"] = summary_figure(main, mapping, metric)
