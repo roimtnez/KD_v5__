@@ -1,5 +1,4 @@
 # Validated Article-1 runtime environment.
--r requirements-analysis.txt
 torch==2.9.1
 torchvision==0.24.1
 jupyter>=1.1,<2
