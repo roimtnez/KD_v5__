@@ -1,3 +1,5 @@
+> Documento histórico anterior a la auditoría del 14 de septiembre. El estado actual y las conclusiones verificadas están en [audit_20260914/report.md](audit_20260914/report.md) y en el [notebook editorial](../../notebooks/article1_paper.ipynb). Las menciones a presencia pendiente o a falta de resultados locales describen el entorno anterior.
+
 # Hypotheses, figures and remaining studies
 
 Evidence: published closure snapshot, 2026-09-09 21:48 UTC. All statements below are descriptive of the available seeds. This is a retrospective research map, not preregistration.

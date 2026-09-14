@@ -1,3 +1,32 @@
+# Estado experimental actual — 14 de septiembre de 2026
+
+Auditoría nueva sobre resultados individuales locales; el registro del 9 de
+septiembre se conserva debajo como histórico. Véanse el
+[informe auditado](article1_paper/audit_20260914/report.md) y el
+[notebook único ejecutado](../notebooks/article1_paper.ipynb).
+
+**Cierre comprobado:** 54 condiciones con 540 estados de teachers verificados;
+324 baseline + 9 CE N=10000 + 12 CE de curva + 36 EXPERT de curva + 54 presencia
++ 36 FedDF de curva = **471 identidades únicas válidas**. Pendientes principales
+ o acordados: **ninguno**. Las nueve anclas FedDF proceden del baseline.
+135 pares de curva; todos los contrastes requeridos a N=10000 tienen 54 pares.
+
+**Opcionales:** 41/54 por método (EXPERT-logit, confidence, consensus, energy),
+recuperados del respaldo compatible: 164 adicionales. Los 13 huecos por método
+son CIFAR seeds 43/44 en los seis regímenes y CIFAR seed 42 Single. Temperaturas
+adicionales: ninguna encontrada. No es necesario rellenar esos huecos para cerrar
+las afirmaciones principales; pooling EXPERT en CIFAR tiene solo seed 42 en cinco
+regímenes y ningún par en Single.
+
+Se comprobaron hashes de archivos, estados de teachers deserializados por separado,
+particiones, train-only presencia, vínculo A/M, subconjuntos anidados, recetas,
+identidades, finitud, SR revisión 2, targets recalculados y trazas emparejadas.
+Las métricas test del student no se reevaluaron. El manifiesto registra fuentes y
+límites; los originales no se modificaron. Control de concentración/entropía,
+unlabeled proxy, inversión y personalización siguen como trabajo futuro.
+
+---
+
 # Artículo 1: estado del análisis — 9 de septiembre de 2026
 
 > Registro histórico de la instantánea de las 14:45 UTC. El estado posterior, con curva completa, está en [article1_closure/report.md](article1_closure/report.md); el plan actual está en [article1_paper/plan.md](article1_paper/plan.md).

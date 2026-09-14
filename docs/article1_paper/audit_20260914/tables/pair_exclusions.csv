@@ -1,0 +1,14 @@
+contrast,dataset,regime,seed,left,right,reason
+pooling_expert,cifar,alpha0p1,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,alpha0p1,44.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,alpha0p5,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,alpha0p5,44.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,alpha1p0,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,alpha1p0,44.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,iid,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,iid,44.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,multi,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,multi,44.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,single,42.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,single,43.0,expert_prob,expert_logit,missing_partner_or_duplicate
+pooling_expert,cifar,single,44.0,expert_prob,expert_logit,missing_partner_or_duplicate

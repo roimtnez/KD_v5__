@@ -1,0 +1,12 @@
+method,temperature,valid,n
+confidence_logit,8.0,True,41
+consensus_logit,8.0,True,41
+energy_logit,8.0,True,41
+expert_logit,8.0,True,41
+expert_prob,8.0,True,90
+expert_prob_sr,8.0,True,54
+feddf_logit,8.0,True,54
+feddf_prob,8.0,True,90
+oracle_logit,8.0,True,54
+oracle_prob,8.0,True,54
+presence_prob,8.0,True,54

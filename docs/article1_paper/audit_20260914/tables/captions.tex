@@ -1,0 +1,18 @@
+\begin{tabular}{ll}
+\toprule
+figure & caption \\
+\midrule
+overview\_references & Student en test oficial T=1, N=10000: media ± SD entre seeds; cobertura y seeds exactas en absolute.csv. CE tiene nueve ejecuciones únicas reutilizadas entre regímenes. No se selecciona la mejor variante retrospectivamente. \\
+overview\_ablations & Student en test oficial T=1, N=10000: media ± SD entre seeds; cobertura y seeds exactas en absolute.csv. CE tiene nueve ejecuciones únicas reutilizadas entre regímenes. No se selecciona la mejor variante retrospectivamente. \\
+selection\_competence & Diferencias dentro de seed, después media ± SD. Signo: primer método menos segundo; accuracy en pp, NLL menor es mejor. n indica seeds válidas; eje categórico sin distancias experimentales iguales. Tres seeds limitan la inferencia. \\
+aggregation\_space & Diferencias dentro de seed, después media ± SD. Signo: primer método menos segundo; accuracy en pp, NLL menor es mejor. n indica seeds válidas; eje categórico sin distancias experimentales iguales. Tres seeds limitan la inferencia. \\
+routing & Diferencias dentro de seed, después media ± SD. Signo: primer método menos segundo; accuracy en pp, NLL menor es mejor. n indica seeds válidas; eje categórico sin distancias experimentales iguales. Tres seeds limitan la inferencia. \\
+support\_target\_student & SR − EXPERT completo; media ± SD de diferencias emparejadas. Target: proxy a T=8; student: test oficial a T=1. Sus niveles absolutos no definen un gap de generalización. Routing y masa previa compartidos; target NLL no aumenta por renormalización sobre soporte que contiene la etiqueta verdadera. \\
+support\_mass & Cada punto es una condición/seed. Masa promedio sobre eventos teacher/muestra seleccionados, excluyendo fallback; no necesariamente masa eliminada del ensemble por muestra. Asociación descriptiva; no demuestra destrucción de dark knowledge. \\
+ce\_only & Solo CE, CIFAR-10: tres seeds reales y su media, sin replicar regímenes. 1200 actualizaciones en todos los puntos; N=100 usa batch efectivo 100 y cambia ejemplos consumidos. \\
+proxy\_absolute & CIFAR-10, tres seeds: media ± SD; anclas N=10000 reutilizadas del baseline. CE compartido entre regímenes. Subconjuntos anidados y trazas emparejadas verificadas; presupuesto de actualizaciones, no de ejemplos. \\
+proxy\_differences & EXPERT − CE, FedDF − CE y EXPERT − FedDF. Media ± SD calculadas después de restar dentro de cada seed. Un cruce entre N evaluados no identifica N óptimo ni umbral universal. Solo CIFAR-10. \\
+masks\_* & Suplemento completo: 54 condiciones, train/expertise counts y A/M/A−M. Ejemplos principales: seed mediana por número de discrepancias, desempate por seed, dentro de dataset/régimen focal; no seleccionados por ventajas del student. Celdas acreditadas no constituyen validación independiente de su máscara. \\
+mask\_advantage & Relación descriptiva de discrepancias A/M con ventaja de EXPERT. Puede cambiar el número de participantes; no aísla calidad respecto a cantidad. Clientes y muestras no son réplicas estadísticas. \\
+\bottomrule
+\end{tabular}

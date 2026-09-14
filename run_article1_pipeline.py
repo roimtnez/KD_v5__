@@ -63,7 +63,9 @@ def check_partition(path, labels, *, dataset, seed, regime):
     }
 
 
-def check_all_partitions():
+def check_all_partitions(seeds=None):
+    if seeds is None:
+        seeds = SEEDS
     from torchvision import datasets
 
     constructors = dict(
@@ -77,7 +79,7 @@ def check_all_partitions():
             ).targets,
             dtype=np.int64,
         )
-        for seed in SEEDS:
+        for seed in seeds:
             for regime in REGIMES:
                 path = OUT / "partitions" / f"{dataset}-seed{seed}-{regime}"
                 rows.append(
@@ -92,9 +94,34 @@ def check_all_partitions():
         + "\n"
     )
     print(
-        "Verified 54 partitions: exact reconstruction, balance, coverage and disjoint splits.",
+        f"Verified {len(rows)} partitions: exact reconstruction, balance, coverage and disjoint splits.",
         flush=True,
     )
+
+
+def check_sources(seeds=None):
+    """Verify teacher conditions and their link to the current partitions."""
+    if seeds is None:
+        seeds = SEEDS
+    for dataset in DATASETS:
+        for seed in seeds:
+            for regime in REGIMES:
+                key = f"{dataset}-seed{seed}-{regime}"
+                partitions = OUT / "partitions" / key
+                load_partitions(partitions)
+                source = OUT / "sources" / key
+                metadata = json.loads((source / "metadata.json").read_text())
+                if (
+                    metadata.get("dataset"),
+                    metadata.get("seed"),
+                    metadata.get("regime"),
+                ) != (dataset, seed, regime):
+                    raise ValueError(f"source identity mismatch: {source}")
+                if metadata.get("partition_metadata_sha256") != file_sha256(
+                    partitions / "metadata.json"
+                ):
+                    raise ValueError(f"source/partition mismatch: {source}")
+                cache_identity(source / "teacher_cache.npz")
 
 
 def execute_notebook(name, *, dataset=None, seed=None, stage=None):
@@ -163,29 +190,6 @@ def check_pilot():
         )
 
 
-def check_sources():
-    """Verify all teacher conditions and their link to the current partitions."""
-    for dataset in DATASETS:
-        for seed in SEEDS:
-            for regime in REGIMES:
-                key = f"{dataset}-seed{seed}-{regime}"
-                partitions = OUT / "partitions" / key
-                load_partitions(partitions)
-                source = OUT / "sources" / key
-                metadata = json.loads((source / "metadata.json").read_text())
-                if (
-                    metadata.get("dataset"),
-                    metadata.get("seed"),
-                    metadata.get("regime"),
-                ) != (dataset, seed, regime):
-                    raise ValueError(f"source identity mismatch: {source}")
-                if metadata.get("partition_metadata_sha256") != file_sha256(
-                    partitions / "metadata.json"
-                ):
-                    raise ValueError(f"source/partition mismatch: {source}")
-                cache_identity(source / "teacher_cache.npz")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -194,12 +198,24 @@ def main():
         help="one checkpoint only; omission prints the sequence",
     )
     parser.add_argument(
+        "--seeds",
+        nargs="*",
+        type=int,
+        default=None,
+        help="semillas a ejecutar (por defecto: todas las semillas del protocolo)",
+    )
+    parser.add_argument(
         "--execute", action="store_true", help="execute the selected phase, then stop"
     )
     parser.add_argument("--skip-notebooks", action="store_true")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     os.chdir(ROOT)
+
+    # Si no se pasa o viene vacío, usa SEEDS; en caso contrario, las semillas indicadas
+    seeds = list(args.seeds) if args.seeds else list(SEEDS)
+    seed_args = ["--seeds", *map(str, seeds)] if args.seeds else []
+
     if not args.phase:
         if args.execute:
             parser.error(
@@ -240,7 +256,7 @@ def main():
         extra = (
             ["--datasets", "mnist", "--seeds", 42, "--regimes", "alpha0p1"]
             if pilot
-            else []
+            else seed_args
         )
         run(
             "-m",
@@ -286,10 +302,10 @@ def main():
         run("-m", "pytest", "-q")
         grid("--stage", "partition")
         if args.execute:
-            check_all_partitions()
+            check_all_partitions(seeds=seeds)
             if not args.skip_notebooks:
                 for dataset in DATASETS:
-                    for seed in SEEDS:
+                    for seed in seeds:
                         execute_notebook(
                             "article1_partition_diagnostics.ipynb",
                             dataset=dataset,
@@ -346,14 +362,14 @@ def main():
     elif phase == "teachers":
         if args.execute:
             check_pilot()
-            check_all_partitions()
-        grid("--stage", "teachers")
+            check_all_partitions(seeds=seeds)
+        grid("--stage", "teachers", *seed_args)
         if args.execute:
-            check_sources()
+            check_sources(seeds=seeds)
         run("-m", "article1.conditions")
     else:
         if args.execute:
-            check_sources()
+            check_sources(seeds=seeds)
         if phase == "presence":
             # Separate control; reuse teachers and preserve the six-arm baseline.
             expert_results = OUT / "results_baseline.csv"
@@ -366,7 +382,7 @@ def main():
                     expert_results = OUT / "results_expertise.csv"
                 check_expert_references(pd.read_csv(expert_results), OUT / "sources")
             for dataset in DATASETS:
-                for seed in SEEDS:
+                for seed in seeds:
                     for regime in REGIMES:
                         runner(
                             "distill",
@@ -411,6 +427,7 @@ def main():
                 *BASELINE_METHODS,
                 "--results",
                 OUT / "results_baseline.csv",
+                *seed_args
             )
             run(
                 "-m",
@@ -418,6 +435,7 @@ def main():
                 OUT / "results_baseline.csv",
                 "--methods",
                 *BASELINE_METHODS,
+                *seed_args,
             )
             notebook(phase)
         elif phase in T8_BLOCKS:
@@ -433,13 +451,13 @@ def main():
                 audit_block("expertise")
             filename, methods = T8_BLOCKS[phase]
             grid(
-                "--stage", "distill", "--methods", *methods, "--results", OUT / filename
+                "--stage", "distill", "--methods", *methods, "--results", OUT / filename, *seed_args
             )
             audit_block(phase)
             notebook(phase)
         elif phase in {"expert-logit", "temperature"}:
             audit_block("expertise")
-            focal = ["--datasets", "cifar", "--regimes", *FOCAL_REGIMES]
+            focal = ["--datasets", "cifar", "--regimes", *FOCAL_REGIMES, *seed_args]
             diagnostic = OUT / "results_expert_logit_focal.csv"
             grid(
                 "--stage",
@@ -503,7 +521,7 @@ def main():
         elif phase == "supervised":
             audit_block("rq1")
             for dataset in DATASETS:
-                for seed in SEEDS:
+                for seed in seeds:
                     runner(
                         "supervised",
                         "--dataset",

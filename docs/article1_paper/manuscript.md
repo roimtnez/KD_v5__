@@ -1,3 +1,5 @@
+> Documento histórico anterior a la auditoría del 14 de septiembre. El estado actual y las conclusiones verificadas están en [audit_20260914/report.md](audit_20260914/report.md) y en el [notebook editorial](../../notebooks/article1_paper.ipynb). Las menciones a presencia pendiente o a falta de resultados locales describen el entorno anterior.
+
 # Who and What to Teach: Expertise-Aware Distillation under Client Specialization
 
 *A controlled study with a labeled public proxy*

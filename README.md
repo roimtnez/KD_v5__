@@ -1,44 +1,51 @@
-## Control de presencia y revisión Target vs Student
-
-Ya está implementado `presence_prob`: selecciona por presencia de clase en **train**,
-conservando el pooling probabilístico completo de EXPERT. Permite comparar medir
-competencia con conocer el soporte de entrenamiento. Es un control pendiente de
-resultados: 54 KD adicionales, sin nuevos teachers ni cambios en caches históricos.
-
-```bash
-python run_article1_pipeline.py --phase presence                 # plan
-python run_article1_pipeline.py --phase presence --execute --device cuda
-```
-
-Genera `OUTPUTS/article1_v3/results_presence.csv` y `presence_pairs.csv`. Requiere los
-54 EXPERT de N=10000 compatibles con el baseline. No se lanza automáticamente con
-las fases existentes; ejecútalo después de la cola GPU actual.
-
-El notebook editorial corrige el signo a **SR − EXPERT**, elimina estimaciones
-inventadas de masa fuera de expertise y muestra target accuracy/NLL/entropía junto a
-student accuracy/NLL. Las figuras de contrastes funcionan con las tablas públicas;
-las métricas absolutas y la masa observada necesitan el CSV auditado local, que se
-comprueba contra el cierre. Véase [diseño, ejecución y limpieza](docs/article1_paper/presence_control.md).
-
 # KD_v5__ — Article 1
 
-Repositorio pequeño de investigación sobre **one-shot federated knowledge distillation**. El objetivo es determinar qué aporta una máscara de competencia cliente–clase y cómo deben contribuir los expertos al target del estudiante global.
+**Estado auditado: 14 de septiembre de 2026.** Los bloques principales y acordados
+están cerrados: **471 students únicos válidos**, 54 condiciones con diez teachers,
+54 controles de presencia y la extensión FedDF completa. No se han lanzado nuevas
+corridas experimentales ni modificado resultados originales en esta auditoría.
 
-**Estado: evidencia v3 cerrada en la instantánea del 9 de septiembre de 2026.**
-324 KD del diseño principal, 9 supervisados y 48 ejecuciones adicionales de curva;
-54 condiciones de teachers. La curva tiene 60 ejecuciones únicas con anclas
-reutilizadas y 45 pares. Los controles archivados siguen parcialmente completos.
-Véanse el [informe de cierre](docs/article1_closure/report.md) y el
-[plan del artículo](docs/article1_paper/plan.md). Las secciones históricas posteriores
-no sustituyen este estado ni implican que debamos volver a entrenar.
+El punto único de entrada es [**notebooks/article1_paper.ipynb**](notebooks/article1_paper.ipynb),
+implementado y ejecutado con los resultados locales. Empieza con cobertura auditada;
+reconstruye máscaras y targets, comprueba procedencia y emparejamiento, calcula
+estadísticas de seeds individuales y genera figuras, tablas, interpretación y
+estructura del artículo. Exporta PNG/PDF, CSV/LaTeX y manifiesto a
+`OUTPUTS/article1_paper/`. Para repetir la auditoría se necesitan los CSV, caches,
+particiones, checkpoints y datasets locales; las salidas incrustadas permiten leer
+la evidencia sin disponer de esos archivos.
 
-**Primer manuscrito:** [borrador en inglés v0.1](docs/article1_paper/manuscript.md), con método, protocolo, resultados, discusión y mapa de evidencia. Related Work y tablas absolutas pendientes antes del envío.
+| Bloque | Esperado | Válido | Emparejado | Pendiente |
+|---|---:|---:|---:|---:|
+| Teachers y máscaras (condiciones) | 54 | 54 | 54 | 0 |
+| Baseline de seis métodos | 324 | 324 | 324 | 0 |
+| CE, N=10000, identidades únicas | 9 | 9 | 9 | 0 |
+| CE adicional de curva | 12 | 12 | 12 | 0 |
+| EXPERT adicional de curva | 36 | 36 | 36 | 0 |
+| Presencia | 54 | 54 | 54 | 0 |
+| FedDF adicional de curva | 36 | 36 | 36 | 0 |
 
-**Para redactar:** abrir [article1_paper.ipynb](notebooks/article1_paper.ipynb).
-Funciona desde un checkout limpio con las tablas públicas de `docs/article1_closure/`,
-sin caches privados ni CUDA para los contrastes públicos; los diagnósticos absolutos requieren el CSV auditado local. Exporta a `OUTPUTS/article1_paper/`.
-Muestra media ± SD para resúmenes y seeds reales solo donde están publicadas.
-La reconstrucción editorial no reemplaza la auditoría original de modelos.
+La curva CIFAR reutiliza nueve anclas de cada método KD y tres CE de N=10000;
+CE compartido entre regímenes no crea réplicas. Hay 135 pares de curva (45 por
+contraste). El respaldo añade 41 ejecuciones compatibles de cada uno de
+EXPERT-logit, confidence-logit, consensus-logit y energy-logit: **164 opcionales**,
+fuera del total 471. Faltan 13 condiciones por opcional; no bloquean el artículo.
+No se encontraron temperaturas KD adicionales a T=8.
+
+Resultados y trazabilidad: [informe actual](docs/article1_paper/audit_20260914/report.md),
+[figuras](docs/article1_paper/audit_20260914/figures/),
+[tablas](docs/article1_paper/audit_20260914/tables/),
+[manifiesto](docs/article1_paper/audit_20260914/manifest.json) y
+[estado experimental](docs/article1_analysis_status.md).
+El [cierre del 9 de septiembre](docs/article1_closure/report.md),
+[plan anterior](docs/article1_paper/plan.md) y
+[borrador v0.1](docs/article1_paper/manuscript.md) son documentos históricos;
+no auditan las ejecuciones posteriores.
+
+La acreditación mejora accuracy frente a presencia en los regímenes Dirichlet
+observados, pero no mejora uniformemente NLL. A=M en Multi/Single y ambos brazos
+coinciden. SR mejora NLL del target por una propiedad algebraica y muestra efectos
+heterogéneos sobre el student; no demuestra por sí solo pérdida de dark knowledge.
+Las curvas CIFAR dependen de N; superar FedDF no implica superar CE.
 
 El protocolo activo mantiene `train / validation / expertise = 70/10/20`.
 No hay nuevas ejecuciones en esta revisión editorial.
@@ -700,7 +707,7 @@ Las tablas originales y la receta de entrenamiento permanecen intactas.
 
 `run_article1_feddf_curve.py` prepara exclusivamente **36 nuevos FedDF-prob**:
 CIFAR × IID/alpha0p1/single × seeds 42/43/44 × N=100/500/1000/5000.
-La instantánea completa confirma nueve EXPERT-prob por tamaño reducido, entrenados
+Los CSV actuales completos confirman nueve EXPERT-prob por tamaño reducido, entrenados
 con esos subconjuntos. Se reutilizan sus 36 ejecuciones y las nueve de N=10000;
 los nueve FedDF-prob de N=10000 se reutilizan del baseline. No se relanza CE.
 
@@ -708,10 +715,6 @@ Desde el checkout independiente, revisar el plan (no entrena ni escribe salidas)
 
 ```bash
 /home/roi/miniconda3/envs/FLWR/bin/python run_article1_feddf_curve.py \
-  --snapshot /tmp/article1-closure-output/20260909T214849851047Z \
-  --source-root /home/roi/PycharmProjects/KD_v5/OUTPUTS/article1_v3 \
-  --data-dir /home/roi/PycharmProjects/KD_v5/data \
-  --output-root /tmp/article1-feddf-curve \
   --device cpu
 ```
 
@@ -720,12 +723,13 @@ Para lanzar cuando se decida, repetir añadiendo **`--execute`**. La opción
 lanzador no se ha ejecutado en modo entrenamiento durante su preparación.
 No usar una segunda instancia concurrente sobre el mismo directorio de salida.
 
-El lanzador verifica hashes de CSV de la instantánea y de los nueve caches
+El lanzador usa por defecto `OUTPUTS/article1_v3` y `data` del checkout actual. Lee
+una vez los CSV actuales y verifica los hashes de los nueve caches
 originales, referencias únicas y válidas, receta y CRN. Usa el runner existente,
 T=8, 1200 actualizaciones y batch nominal 256 (efectivo 100 para N=100), con
 los mismos subconjuntos anidados. Ejecuta secuencialmente y escribe únicamente
-`<output-root>/results_proxy_size_feddf_prob.csv` y manifiestos `launch_*.json`.
-No toca los CSV originales, teachers, particiones ni la cola del pipeline.
+`OUTPUTS/article1_v3/results_proxy_size_feddf_prob.csv` y manifiestos `launch_*.json`.
+No toca los CSV existentes, teachers, particiones ni la cola del pipeline.
 La reanudación valida los resultados existentes y omite solo identidades
 compatibles; tras cada ejecución comprueba el emparejamiento con EXPERT.
 

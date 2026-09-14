@@ -1,0 +1,36 @@
+\begin{tabular}{lllllrrr}
+\toprule
+contrast & dataset & positive\_accuracy\_regimes & negative\_accuracy\_regimes & negative\_nll\_regimes & accuracy\_min\_pp & accuracy\_max\_pp & complete\_regimes \\
+\midrule
+competence\_presence & cifar & alpha0p1,alpha0p5,alpha1p0 & iid & alpha0p5 & -0.0767 & 5.2467 & 6 \\
+competence\_presence & fmnist & alpha0p1,alpha0p5,alpha1p0,iid &  & alpha0p5 & 0.0000 & 2.9500 & 6 \\
+competence\_presence & mnist & alpha0p1,alpha0p5,alpha1p0 &  & alpha0p1,alpha0p5,alpha1p0,iid & 0.0000 & 0.4733 & 6 \\
+expert\_ce & cifar &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & alpha0p5,alpha1p0,iid & -3.9167 & -0.2533 & 6 \\
+expert\_ce & fmnist & multi,single & alpha0p1,alpha0p5,alpha1p0,iid & alpha0p5,alpha1p0,iid & -1.0267 & 0.5233 & 6 \\
+expert\_ce & mnist & alpha0p1,multi,single & alpha0p5,alpha1p0,iid &  & -0.5633 & 0.1767 & 6 \\
+expertise & cifar & alpha0p1,alpha0p5,alpha1p0,multi,single & iid & alpha0p1,alpha0p5,single & -0.0767 & 69.2867 & 6 \\
+expertise & fmnist & alpha0p1,alpha0p5,alpha1p0,iid,multi,single &  & alpha0p1,alpha0p5,multi & 0.0667 & 80.2967 & 6 \\
+expertise & mnist & alpha0p1,alpha0p5,alpha1p0,multi,single &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & 0.0000 & 88.7300 & 6 \\
+feddf\_ce & cifar &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & alpha1p0,iid & -69.5400 & -3.6533 & 6 \\
+feddf\_ce & fmnist &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & alpha1p0,iid & -79.7733 & -1.0333 & 6 \\
+feddf\_ce & mnist &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single &  & -88.6500 & -0.2000 & 6 \\
+oracle\_expert & cifar & alpha0p5,alpha1p0,iid,multi & alpha0p1 & alpha0p5,alpha1p0,iid,multi & -4.0567 & 1.0867 & 6 \\
+oracle\_expert & fmnist & alpha0p1,alpha0p5,alpha1p0,iid & multi & alpha0p1,alpha0p5,alpha1p0,iid & -0.0600 & 0.8767 & 6 \\
+oracle\_expert & mnist & alpha0p1,alpha0p5,alpha1p0,iid,multi &  & alpha0p1,alpha0p5,alpha1p0,iid,multi & 0.0000 & 0.3367 & 6 \\
+pooling\_expert & cifar & alpha0p1,alpha0p5,alpha1p0,iid & multi & alpha0p1,alpha0p5,alpha1p0,iid,multi & -0.1100 & 2.8000 & 0 \\
+pooling\_expert & fmnist & alpha0p5,alpha1p0,iid,multi & alpha0p1 & alpha0p1,alpha0p5,alpha1p0,iid,multi & -0.1600 & 0.2367 & 6 \\
+pooling\_expert & mnist & alpha0p5,alpha1p0,iid,multi & alpha0p1 & alpha0p1,alpha0p5,alpha1p0,iid,multi & -0.0300 & 0.0933 & 6 \\
+pooling\_feddf & cifar & alpha0p1,alpha0p5,alpha1p0,iid,multi & single & alpha0p1,alpha0p5,alpha1p0,multi,single & -0.4000 & 12.5433 & 6 \\
+pooling\_feddf & fmnist & alpha0p1,alpha0p5,alpha1p0,multi & iid,single & alpha0p1,alpha0p5,alpha1p0,multi,single & -0.3467 & 18.5500 & 6 \\
+pooling\_feddf & mnist & alpha0p1,alpha0p5,alpha1p0,iid,multi & single & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & -0.2433 & 15.3700 & 6 \\
+pooling\_oracle & cifar & alpha0p5,alpha1p0 & alpha0p1,iid,multi & alpha0p5,alpha1p0,multi & -1.8900 & 0.7367 & 6 \\
+pooling\_oracle & fmnist & alpha0p1,alpha0p5,alpha1p0,iid,multi &  & alpha0p1,alpha0p5,alpha1p0,multi & 0.0000 & 0.2867 & 6 \\
+pooling\_oracle & mnist & alpha0p1,alpha0p5,iid,multi & alpha1p0 & alpha0p1,alpha0p5,alpha1p0,iid,multi & -0.0067 & 0.0467 & 6 \\
+selection & cifar & alpha0p1,alpha0p5,alpha1p0,iid,multi,single &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & 1.3467 & 68.8867 & 6 \\
+selection & fmnist & alpha0p1,alpha0p5,alpha1p0,iid,multi,single &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & 0.5700 & 79.9500 & 6 \\
+selection & mnist & alpha0p1,alpha0p5,alpha1p0,iid,multi,single &  & alpha0p1,alpha0p5,alpha1p0,iid,multi,single & 0.1200 & 88.4867 & 6 \\
+support & cifar & single & alpha0p1,alpha0p5,alpha1p0,iid,multi &  & -6.7433 & 0.5733 & 6 \\
+support & fmnist & single & alpha0p1,alpha0p5,alpha1p0,iid,multi & single & -1.2633 & 0.1567 & 6 \\
+support & mnist & alpha0p5,alpha1p0,single & alpha0p1,multi & alpha1p0,iid,single & -0.3467 & 0.2200 & 6 \\
+\bottomrule
+\end{tabular}

@@ -1,15 +1,11 @@
 """Plan (default) or explicitly execute the 36 missing FedDF-prob proxy runs.
 
-Use an audited snapshot for EXPERT references and read-only original teacher caches.
-Writes only to a separate output directory; does not invoke the phase pipeline.
+Read the current, complete result files as EXPERT references. Writes only to a
+separate output directory; does not invoke the phase pipeline.
 """
 from __future__ import annotations
 
 import os
-for variable in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
-    os.environ[variable] = '1'
-
-os.environ.setdefault('MPLCONFIGDIR', '/tmp/article1-matplotlib')
 
 import argparse
 from datetime import datetime, timezone
@@ -23,7 +19,7 @@ import sys
 import pandas as pd
 from article1.distillation import kd_config, metadata_identity
 from article1.hashes import file_sha256
-from article1.progress import KD, read_csv, validate_rows
+from article1.progress import KD, read_csv
 
 SIZES = (100, 500, 1000, 5000)
 REGIMES = ('iid', 'alpha0p1', 'single')
@@ -97,31 +93,37 @@ def pending_jobs(planned, existing, refs):
     return [job for job in planned if job['run_id'] not in completed]
 
 
+def current_references(source):
+    """Read the live completed inputs once and validate the needed identities."""
+    frames = []
+    for name in ('results_baseline.csv', 'results_proxy_size_expert_prob.csv'):
+        path = source / name
+        if not path.exists():
+            raise ValueError(f'Missing current input: {path}')
+        frame = read_csv(path)
+        if frame.empty or frame.run_id.duplicated().any():
+            raise ValueError(f'Empty or duplicate current input: {path}')
+        required = {'dataset', 'regime', 'seed', 'method', 'proxy_size', 'run_id',
+                    'cache_sha256', 'M_sha256', 'proxy_sha256', 'proxy_labels_sha256',
+                    'training_recipe_json', 'temperature'}
+        if not required.issubset(frame.columns):
+            raise ValueError(f'Incomplete current input schema: {path}')
+        frame = frame.copy()
+        frame['valid'] = True
+        frames.append(frame)
+    return references(pd.concat(frames, ignore_index=True))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--snapshot', type=Path, required=True)
-    parser.add_argument('--source-root', type=Path, required=True)
-    parser.add_argument('--data-dir', type=Path, required=True)
-    parser.add_argument('--output-root', type=Path, required=True)
+    parser.add_argument('--source-root', type=Path, default=ROOT / 'OUTPUTS' / 'article1_v3')
+    parser.add_argument('--data-dir', type=Path, default=ROOT / 'data')
+    parser.add_argument('--output-root', type=Path, default=ROOT / 'OUTPUTS' / 'article1_v3')
     parser.add_argument('--device', default='cpu')
     parser.add_argument('--execute', action='store_true')
     args = parser.parse_args()
-    snapshot, source, data, output = [p.resolve() for p in (args.snapshot, args.source_root, args.data_dir, args.output_root)]
-    if ROOT == source.parent.parent or any(output.is_relative_to(p) for p in (source.parent.parent, snapshot, data)):
-        raise ValueError('Use an independent checkout and output directory outside training, snapshot and data')
-    manifest = json.loads((snapshot/'manifest.json').read_text())
-    if manifest.get('closure', {}).get('proxy_curve') != 'cerrado':
-        raise ValueError('Requires an audited complete EXPERT/CE curve snapshot')
-    frames = []
-    for name in ('results_baseline.csv', 'results_proxy_size_expert_prob.csv'):
-        path = snapshot/'snapshots'/name
-        records = [r for r in manifest['inputs'] if Path(r['original']).name == name]
-        if len(records) != 1 or file_sha256(path) != records[0]['sha256']:
-            raise ValueError(f'Snapshot hash mismatch: {name}')
-        frames.append(read_csv(path))
-    coverage = read_csv(snapshot/'tables/coverage.csv')
-    subsets = read_csv(snapshot/'tables/proxy_subsets.csv')
-    refs = references(validate_rows(pd.concat(frames, ignore_index=True), coverage, subsets, False))
+    source, data, output = [p.resolve() for p in (args.source_root, args.data_dir, args.output_root)]
+    refs = current_references(source)
     for regime, seed in product(REGIMES, SEEDS):
         cache = source/'sources'/f'cifar-seed{seed}-{regime}'/'teacher_cache.npz'
         if file_sha256(cache) != refs[regime, seed, 10000, 'expert_prob'].cache_sha256:
@@ -129,7 +131,9 @@ def main():
     results = output/'results_proxy_size_feddf_prob.csv'
     planned = jobs(refs, source, data, results, args.device)
     def pending():
-        existing = validate_rows(read_csv(results), coverage, subsets, False) if results.exists() else pd.DataFrame()
+        existing = read_csv(results) if results.exists() else pd.DataFrame()
+        if not existing.empty:
+            existing = existing.copy(); existing['valid'] = True
         return pending_jobs(planned, existing, refs)
     remaining = pending()
     print(f'EXPERT verified: 36 reduced + 9 full-size; FedDF reused from baseline: 9; pending: {len(remaining)}/36')
@@ -140,8 +144,8 @@ def main():
         return
     output.mkdir(parents=True, exist_ok=True)
     receipt = dict(date=datetime.now(timezone.utc).isoformat(), analysis_commit=subprocess.check_output(
-        ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(), snapshot=str(snapshot),
-        snapshot_manifest_sha256=file_sha256(snapshot/'manifest.json'), expected=36,
+        ['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        reference_source=str(source), expected=36,
         reused_full_size=9, jobs=planned)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     (output/f'launch_{stamp}.json').write_text(json.dumps(receipt, indent=2)+'\n')

@@ -32,8 +32,8 @@ def test_execution_is_limited_to_selected_kd_stage(monkeypatch, stage, methods):
     monkeypatch.setattr(
         pipeline.subprocess, "run", lambda cmd, **kw: commands.append(cmd)
     )
-    monkeypatch.setattr(pipeline, "check_all_partitions", lambda: None)
-    monkeypatch.setattr(pipeline, "check_sources", lambda: None)
+    monkeypatch.setattr(pipeline, "check_all_partitions", lambda **kwargs: None)
+    monkeypatch.setattr(pipeline, "check_sources", lambda **kwargs: None)
     monkeypatch.setattr(pipeline, "check_pilot", lambda: None)
     monkeypatch.setattr(pipeline, "execute_notebook", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -52,7 +52,7 @@ def test_baseline_executes_probability_methods_before_logit_methods(monkeypatch)
     monkeypatch.setattr(
         pipeline.subprocess, "run", lambda cmd, **kw: commands.append(cmd)
     )
-    monkeypatch.setattr(pipeline, "check_sources", lambda: None)
+    monkeypatch.setattr(pipeline, "check_sources", lambda **kwargs: None)
     monkeypatch.setattr(pipeline, "execute_notebook", lambda *a, **kw: None)
     monkeypatch.setattr(
         sys, "argv", ["pipeline", "--phase", "baseline", "--execute", "--device", "cpu"]
@@ -70,7 +70,7 @@ def test_partitions_only_never_reaches_training(monkeypatch):
     monkeypatch.setattr(
         pipeline.subprocess, "run", lambda cmd, **kw: commands.append(cmd)
     )
-    monkeypatch.setattr(pipeline, "check_all_partitions", lambda: checks.append(True))
+    monkeypatch.setattr(pipeline, "check_all_partitions", lambda **kwargs: checks.append(True))
     monkeypatch.setattr(
         pipeline, "execute_notebook", lambda *a, **kw: notebooks.append(kw)
     )

@@ -1,44 +1,41 @@
-"""The self-contained editorial notebook must run from published evidence alone."""
-
-import json
+"""Editorial statistics use individual seeds; the historical report is not input."""
 from pathlib import Path
-
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+import json
 import pandas as pd
 import pytest
+from article1.editorial import summary
+from article1.progress import compatible_pairs
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_notebook_executes_without_private_results(tmp_path, monkeypatch):
-    notebook = json.loads((ROOT / "notebooks/article1_paper.ipynb").read_text())
-    namespace = {"display": lambda *args: None}
-    monkeypatch.chdir(ROOT)
-    for cell in notebook["cells"]:
-        if cell["cell_type"] != "code":
-            continue
-        source = "".join(cell["source"])
-        # Redirect figure outputs only; inputs remain the real published CSVs.
-        source = source.replace(
-            "FIGURES = ROOT / 'OUTPUTS/article1_paper'",
-            f"FIGURES = Path({str(tmp_path)!r})",
-        )
-        exec(compile(source, "article1_paper.ipynb", "exec"), namespace)  # noqa: S102 - trusted repository notebook
-    support = namespace["support"]
-    cifar = support[support.dataset.eq("cifar")]
-    assert (cifar[cifar.metric.eq("target_nll")]["mean"] < 0).all()
-    acc = cifar[cifar.metric.eq("student_test_accuracy")].set_index("regime")["mean"]
-    assert (acc < 0).sum() == 5
-    assert acc["iid"] == pytest.approx(-0.0653333333333333)
-    assert (tmp_path / "target_vs_student.png").is_file()
-    plt.close("all")
+def test_paired_statistics_keep_covariance_and_percentage_points():
+    rows = []
+    for seed, a, b in [(42, .91, .90), (43, .61, .60), (44, .81, .80)]:
+        for method, score in [('expert_prob', a), ('feddf_prob', b)]:
+            rows.append(dict(dataset='cifar', regime='iid', seed=seed, method=method,
+                             student_test_accuracy=score, trace='same', run_id=f'{method}{seed}'))
+    pairs, _ = compatible_pairs(pd.DataFrame(rows), 'expert_prob','feddf_prob',
+                                fields=['trace'], metrics=['student_test_accuracy'])
+    s = summary(pairs, ['dataset','regime'], ['delta_student_test_accuracy']).iloc[0]
+    assert s['mean'] == pytest.approx(1)
+    assert s.sd == pytest.approx(0, abs=1e-12)
+    assert s.n == 3 and s.seeds == '42,43,44'
 
 
-def test_support_summary_has_explicit_paired_seed_evidence():
-    table = pd.read_csv(ROOT / "docs/article1_closure/tables/main_contrast_summary.csv")
-    support = table[table.contrast.eq("support")]
-    assert len(support) == 90
-    assert support.n.eq(3).all() and support.seeds.eq("42,43,44").all()
+def test_single_seed_does_not_invent_sd_or_fill_missing_values():
+    f = pd.DataFrame([dict(dataset='cifar', seed=42, student_test_accuracy=.8)])
+    s = summary(f,['dataset'],['student_test_accuracy']).iloc[0]
+    assert s['mean']==80 and s.n==1 and pd.isna(s.sd)
+
+
+def test_reused_seed_cannot_be_counted_as_another_replica():
+    f = pd.DataFrame([dict(dataset='cifar',seed=42,student_test_accuracy=.8)]*2)
+    with pytest.raises(ValueError,match='Duplicate experimental seed'):
+        summary(f,['dataset'],['student_test_accuracy'])
+
+
+def test_historical_support_summary_retains_its_original_evidence():
+    f = pd.read_csv(ROOT/'docs/article1_closure/tables/main_contrast_summary.csv')
+    s = f[f.contrast.eq('support')]
+    assert len(s)==90 and s.n.eq(3).all() and s.seeds.eq('42,43,44').all()
