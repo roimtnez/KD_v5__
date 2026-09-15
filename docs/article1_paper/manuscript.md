@@ -193,7 +193,7 @@ Pre-restriction mass is measured from the actual teacher outputs and M, not appr
 
 ![**Figure 4](audit_20260914/figures/support_target_student.png)
 
-**Figure 4. SR minus full EXPERT: target and student outcomes.** The five rows show target accuracy, NLL and entropy on the proxy at T=8, followed by student accuracy and NLL on the official test at T=1. Mean ± sample SD of paired seeds. Target likelihood has a label-dependent monotonicity property; student metrics do not. Accuracy differences use pp. Different datasets and metrics have different vertical scales.
+**Figure 4. SR minus full EXPERT: target and student outcomes.** The five columns show target accuracy, NLL and entropy on the proxy at T=8, followed by student accuracy and NLL on the official test at T=1. Mean ± sample SD of paired seeds. Target likelihood has a label-dependent monotonicity property; student metrics do not. Accuracy differences use pp. Different datasets and metrics have different vertical scales.
 
 ### 5.5. Distillation value depends on the public-label budget
 

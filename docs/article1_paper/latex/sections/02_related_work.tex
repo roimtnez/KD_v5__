@@ -1,0 +1,23 @@
+\hypertarget{related-work-and-positioning}{%
+\section{Related work and positioning}\label{related-work-and-positioning}}
+
+\hypertarget{distillation-and-federated-model-fusion}{%
+\subsection{Distillation and federated model fusion}\label{distillation-and-federated-model-fusion}}
+
+Knowledge distillation compresses predictive information from a model or ensemble into a student; the original formulation also discusses ensembles containing specialist models \cite{hinton2015}. FedMD applies distillation to collaboration between participants with independently designed architectures \cite{li2019}. FedDF develops ensemble-based server model fusion using client predictions on unlabeled auxiliary data \cite{lin2020}. These works establish distillation as a mechanism for combining models, rather than establish the value of the particular class-conditional accreditation rule examined here.
+
+Our FedDF-logit label denotes a uniform logit-pooling reference within the implemented one-shot recipe. It does not identify a full reproduction of the original iterative FedDF protocol. The companion FedDF-prob arm changes only the pooling operator. Because the present experiments use fixed architectures within each dataset, they also do not test the architecture-heterogeneity capabilities motivating these earlier methods.
+
+\hypertarget{unequal-teacher-contributions-and-specialization}{%
+\subsection{Unequal teacher contributions and specialization}\label{unequal-teacher-contributions-and-specialization}}
+
+FedAUX combines auxiliary-data pretraining with certainty-based weighting of ensemble predictions \cite{sattler2021}. This is relevant prior art for assigning unequal influence to teachers. Our mask uses class-conditional accuracy on a private expertise split, while routing additionally uses the labeled proxy. These information sources and training procedures differ; we do not treat our internal confidence or energy controls as implementations of FedAUX.
+
+Maron, Fresse and Orzalesi study one-shot distillation from monoclass teachers, explicitly addressing knowledge fragmentation and out-of-distribution supervision \cite{maron2025}. Their setting is directly relevant to the single-class endpoint considered here. Accordingly, our contribution is not the discovery that monoclass specialization affects knowledge transfer. The present evidence instead contrasts presence with measured competence across IID, Dirichlet and disjoint allocations, then relates output restriction and proxy budgets to student accuracy and NLL. This describes our experimental scope; it does not assert that every component is absent from that prior work.
+
+\hypertarget{proxy-resources-and-scope-of-comparison}{%
+\subsection{Proxy resources and scope of comparison}\label{proxy-resources-and-scope-of-comparison}}
+
+DENSE addresses data-free one-shot federated learning through data generation followed by model distillation \cite{zhang2022}. Our setting assumes an existing labeled proxy, so the experiments do not establish superiority over methods operating without those resources. Likewise, Federated Oriented Learning targets one-shot personalization using a broader model-alignment procedure \cite{huang2025}, whereas our evaluated endpoint is a single global student.
+
+We therefore position this paper as a study of routing and transfer under an explicit information budget. Uniform pooling receives teacher outputs and proxy inputs; presence and EXPERT additionally use proxy labels and client--class metadata; ORACLE uses proxy labels to select correct individual predictions. The supervised reference uses the same public labels without teacher predictions. Accounting for these differences is necessary for interpreting the contrasts and avoids conflating our internal ablations with an exhaustive state-of-the-art benchmark.

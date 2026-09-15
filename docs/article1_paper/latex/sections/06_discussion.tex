@@ -1,0 +1,25 @@
+\hypertarget{discussion-and-limitations}{%
+\section{Discussion and limitations}\label{discussion-and-limitations}}
+
+\hypertarget{what-measured-competence-adds}{%
+\subsection{What measured competence adds}\label{what-measured-competence-adds}}
+
+The presence control bounds the interpretation of the most dramatic improvements. When A=M, the data do not support an extra benefit from competence measurement: both rules generate the same routing. Where the masks differ, the accuracy gains under Dirichlet provide evidence for the usefulness of the accreditation procedure under the studied recipe. The simultaneous NLL penalties in some conditions prevent an unconditional claim of better predictions. Future refinements should state whether their objective is classification accuracy, probability quality or a specified combination, rather than choosing a metric after observing results.
+
+The study also distinguishes a rule from its information budget. EXPERT requires a labeled proxy and private class-conditional statistics. These are explicit inputs to the system; the mask is not inferred label-free from teacher logits. ORACLE uses the true label more directly at sample level. Even though CE and KD see the same proxy labels where applicable, their objectives differ, and KD receives teacher-derived information. The CE contrast measures the utility of the complete procedure, not an isolated causal effect of private knowledge.
+
+\hypertarget{expertise-evidence-and-output-interpretation}{%
+\subsection{Expertise evidence and output interpretation}\label{expertise-evidence-and-output-interpretation}}
+
+Separating validation from expertise avoids using the checkpoint-selection set again to construct M. It does not ensure precise estimates for rare classes. The binary threshold does not incorporate uncertainty beyond requiring an observation, and accuracy on the same expertise cells used to select M cannot independently validate those selected cells. No separate local test was retained for that purpose. Class-conditional accuracy also does not certify rejection of out-of-support inputs, which becomes especially important for unlabeled-proxy extensions.
+
+The SR findings caution against interpreting increased agreement with proxy labels as improved transfer. The mathematical target guarantee and the experimental student outcome concern different objects. Changes in class relationships and concentration remain coupled in the present ablation. These results motivate further investigation, but not a claim that all outside-mask probability mass is useful knowledge or a calibrated rejection signal.
+
+\hypertarget{scope-and-reproducibility}{%
+\subsection{Scope and reproducibility}\label{scope-and-reproducibility}}
+
+The experiments cover three datasets, fixed architectures, three seeds and T=8. Dirichlet changes client quantities as well as class composition; multi fixes specific class pairs. The results are not an exhaustive SOTA comparison, a communication-efficiency measurement, or a comparison between independently optimized CE and KD training recipes. Optional controls are incomplete, and the direct EXPERT pooling evidence is particularly limited on CIFAR. Unlabeled proxy routing, synthetic proxy generation and personalization are outside the evaluated scope.
+
+The 14 September audit checked 54 teacher conditions, 540 checkpoint byte hashes and separately deserialized tensor-state hashes, using CPU and weights-only loading. It also verified partition provenance, masks, nested subsets, result identities, paired training traces, and reconstructed targets and pre-restriction mass. It did not regenerate proxy logits by inference or independently reevaluate students on test data. The audit establishes the stated scope of record and artifact consistency; it should not be described as an independent replication of training or test performance.
+
+Several execution commits are recorded. Historical test results were available during project development, and restarting the protocol does not make them previously unseen. We do not describe the research process as preregistered. The archived audit and its numerical outputs remain immutable references; the present revision changes the manuscript rather than the experiments.

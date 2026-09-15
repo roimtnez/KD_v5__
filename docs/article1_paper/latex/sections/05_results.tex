@@ -1,0 +1,142 @@
+\hypertarget{results}{%
+\section{Results}\label{results}}
+
+\hypertarget{uniform-aggregation-under-client-specialization}{%
+\subsection{Uniform aggregation under client specialization}\label{uniform-aggregation-under-client-specialization}}
+
+Figure~\ref{fig:1} places the routing comparisons alongside proxy-only supervision. The principal contrasts share the local teachers; differences between students therefore reflect the evaluated target-construction procedure under the common recipe. Uniform probability pooling becomes a particularly weak reference under disjoint allocation. In single-class conditions, EXPERT−FedDF-prob improves mean accuracy by 88.73 pp on MNIST, 80.30 pp on Fashion-MNIST and 69.29 pp on CIFAR-10. In CIFAR-10 IID, the difference is instead −0.08 pp.~These results establish the usefulness of the combined label-and-mask routing procedure in the specialized conditions, without yet attributing its gains to measuring competence.
+
+ORACLE-logit−FedDF-logit is positive in mean accuracy in all eighteen dataset--regime groups. However, ORACLE is not a student-performance ceiling. On CIFAR-10 under \(\alpha\)=0.1, ORACLE-prob−EXPERT-prob is −4.06 pp.~Selecting individual correct predictions does not optimize the student's test risk directly.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/overview_references.pdf}
+\caption{Student-level reference comparison at N=10000. Absolute accuracy and
+NLL across datasets and categorical allocation regimes. Error bars show
+sample SD across three seeds. CE is the same dataset/seed reference
+reused across regimes, not additional replicates. Methods have different
+information budgets; the plot is not a ranking under identical access to
+labels and metadata.}
+\label{fig:1}
+\end{figure}
+
+\hypertarget{class-presence-versus-measured-competence}{%
+\subsection{Class presence versus measured competence}\label{class-presence-versus-measured-competence}}
+
+The presence control changes the interpretation of the disjoint-allocation gains. In every verified multi and single condition, A and M coincide; the corresponding presence and EXPERT results coincide as well. In these conditions, the large improvement over uniform pooling is achievable with training-presence information. It does not demonstrate an additional benefit from estimating class-conditional accuracy.
+
+The two masks differ in Dirichlet conditions, where competence accreditation can add value. For CIFAR-10, EXPERT−presence improves mean accuracy by 1.37 ± 0.15 pp at \(\alpha\)=1, 5.25 ± 0.94 pp at \(\alpha\)=0.5, and 3.18 ± 2.91 pp at \(\alpha\)=0.1. Fashion-MNIST shows a 2.95 ± 1.61 pp gain at \(\alpha\)=0.5; the MNIST gains are smaller. Table~\ref{tab:cifar} reports all CIFAR regimes rather than selecting only favorable conditions.
+
+The accuracy gains do not imply uniform improvement in probability quality. On CIFAR-10, EXPERT increases NLL relative to presence at \(\alpha\)=1 and \(\alpha\)=0.1, while reducing it at \(\alpha\)=0.5. In IID, despite differences between A and M, the mean accuracy effect is −0.08 ± 0.39 pp.~Accreditation is consequently useful in some allocations and metrics, rather than uniformly preferable.
+
+These comparisons isolate the change from presence-based to accuracy-based routing under a fixed recipe. They do not isolate an effect of competence independently of ensemble size: rejecting teachers also changes the number and composition of contributors.
+
+\begin{table}[htbp]
+\centering
+\caption{CIFAR-10 effects at $N=10000$. Mean $\pm$ sample SD of paired differences over seeds 42/43/44. Accuracy is in pp; NLL is unscaled. Positive accuracy and negative NLL favor EXPERT. Uniform denotes FedDF-prob.}
+\label{tab:cifar}
+\small
+\begin{tabular}{lrrr}
+\toprule
+Allocation & \multicolumn{1}{c}{EXPERT $-$ uniform} & \multicolumn{2}{c}{EXPERT $-$ presence} \\
+\cmidrule(lr){2-2}\cmidrule(lr){3-4}
+ & Accuracy & Accuracy & NLL \\
+\midrule
+IID & $-0.08\pm0.39$ & $-0.08\pm0.39$ & $+0.029\pm0.024$ \\
+$\alpha=1.0$ & $+1.38\pm0.16$ & $+1.37\pm0.15$ & $+0.022\pm0.035$ \\
+$\alpha=0.5$ & $+6.54\pm0.93$ & $+5.25\pm0.94$ & $-0.060\pm0.043$ \\
+$\alpha=0.1$ & $+28.56\pm11.18$ & $+3.18\pm2.91$ & $+0.133\pm0.145$ \\
+Multi & $+26.87\pm4.15$ & $0.00\pm0.00$ & $0.000\pm0.000$ \\
+Single & $+69.29\pm0.71$ & $0.00\pm0.00$ & $0.000\pm0.000$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/selection_competence.pdf}
+\caption{Selection and competence contrasts. Differences are computed within
+dataset, allocation and seed before summarization. The EXPERT−presence
+contrast tests the incremental effect of accuracy-based accreditation;
+zero effects in multi/single accompany identical masks. Read accuracy
+and NLL together. Mean ± sample SD summarizes three seeds, not
+independent client replications.}
+\label{fig:2}
+\end{figure}
+
+\hypertarget{pooling-space-depends-on-the-routing-rule}{%
+\subsection{Pooling space depends on the routing rule}\label{pooling-space-depends-on-the-routing-rule}}
+
+Uniform pooling remains sensitive to aggregation space at T=8. On CIFAR-10, FedDF-prob−FedDF-logit improves mean accuracy by 12.54 pp at \(\alpha\)=0.1 and 11.39 pp in multi. The corresponding ORACLE differences are −1.89 and −0.05 pp.~Thus, an operator comparison for one selected ensemble cannot be generalized to every routing rule.
+
+Probability coordinates are bounded, but their values still depend on teacher logit scale through softmax. Arithmetic probability pooling therefore does not eliminate scale or calibration mismatch. Nor do small observed differences demonstrate equivalence between operators.
+
+The direct EXPERT pooling comparison is complete for MNIST and Fashion-MNIST but only includes CIFAR seed 42 in five regimes, with no single-class pair. Its CIFAR observations are descriptive single-seed results: SD is not estimable there. Figure~\ref{fig:3} retains these gaps rather than substituting optional observations for a complete comparison. Conclusions about temperature robustness are outside the available evidence.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/aggregation_space.pdf}
+\caption{Probability minus logit pooling. FedDF and ORACLE comparisons contain
+three paired seeds per condition. The EXPERT comparison has incomplete
+CIFAR coverage: one seed for five allocations and no single-class pair.
+Do not compare a missing SD with a zero SD or interpret small
+differences as equivalence. All available KD runs use T=8.}
+\label{fig:3}
+\end{figure}
+
+\hypertarget{better-proxy-targets-do-not-guarantee-better-students}{%
+\subsection{Better proxy targets do not guarantee better students}\label{better-proxy-targets-do-not-guarantee-better-students}}
+
+On CIFAR-10, SR reduces target NLL in all six regimes while increasing student test NLL in all six. Mean student accuracy decreases in five regimes: SR−full is −6.53 pp in IID, −6.74 pp at \(\alpha\)=0.1 and −1.31 pp in multi. Single is the exception, at +0.57 ± 0.87 pp.~In IID, target accuracy improves by 9.53 pp while student accuracy falls. The disagreement is therefore visible beyond likelihood alone.
+
+The result should not be generalized into universal harm from restriction. MNIST has positive mean accuracy effects in \(\alpha\)=1, \(\alpha\)=0.5 and single, and Fashion-MNIST has a positive effect in single. Their NLL patterns also contain exceptions. Figure~\ref{fig:4} reports all five target/student metrics so that the statement remains conditional on dataset, allocation and metric.
+
+The target likelihood improvement has a structural explanation: each selected teacher supports the true proxy label, and SR increases or preserves that label's probability. This label-dependent guarantee does not extend to student risk. In particular, target metrics use the training proxy at T=8, whereas student metrics use the official test at T=1; differences in their absolute levels are not generalization gaps.
+
+Pre-restriction mass is measured from the actual teacher outputs and M, not approximated from the allocation name or fraction of absent classes. Even IID teachers can fail the expertise threshold, producing nonzero mass outside their accredited support. Supplementary mass diagnostics relate this quantity to student effects descriptively. SR simultaneously changes concentration and interclass information, so these associations and ablations do not identify dark-knowledge removal as the unique mechanism. A matched-concentration control would be a separate, currently unexecuted study.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/support_target_student.pdf}
+\caption{SR minus full EXPERT: target and student outcomes. The five columns show
+target accuracy, NLL and entropy on the proxy at T=8, followed by
+student accuracy and NLL on the official test at T=1. Mean ± sample SD
+of paired seeds. Target likelihood has a label-dependent monotonicity
+property; student metrics do not. Accuracy differences use pp.~Different
+datasets and metrics have different vertical scales.}
+\label{fig:4}
+\end{figure}
+
+\hypertarget{distillation-value-depends-on-the-public-label-budget}{%
+\subsection{Distillation value depends on the public-label budget}\label{distillation-value-depends-on-the-public-label-budget}}
+
+At N=10000, EXPERT has lower mean accuracy than CE in all six CIFAR-10 allocations. Its differences are −3.73 pp in IID, −2.64 pp at \(\alpha\)=0.1 and −0.25 pp in single. Accuracy and NLL can disagree: IID improves NLL over CE despite lower accuracy, while single has higher NLL. Large improvements over FedDF consequently do not establish superiority to using the public labels directly.
+
+Figure~\ref{fig:5} first shows the CE-only response to N, independently of any routing comparison. Figure~\ref{fig:6} then contrasts both KD methods with CE and with each other. In IID at N=500, EXPERT−CE is +10.88 ± 0.76 pp, but FedDF−CE is +12.32 ± 0.73 pp.~The KD advantage at this budget therefore does not require the expertise mask; EXPERT−FedDF is −1.44 ± 0.41 pp.~EXPERT has lower mean accuracy than FedDF at every evaluated IID size.
+
+Under \(\alpha\)=0.1 and single, EXPERT instead exceeds FedDF in mean accuracy at all five sizes. At N=100, the respective gains are +4.01 ± 5.63 pp and +24.07 ± 1.38 pp; at N=10000 they reach +28.56 ± 11.18 pp and +69.29 ± 0.71 pp.~Yet the comparison with CE is much less favorable and depends on N. For example, in IID the mean EXPERT−CE advantage changes from +7.91 pp at N=100 to −3.73 pp at N=10000, with a sign change between the evaluated sizes 5000 and 10000. The corresponding single-class sign change occurs over the same interval, but does not establish the same underlying mechanism.
+
+The curve thus separates two phenomena: selecting teachers can repair uniform distillation under specialization, while distillation's incremental value over public labels depends on the proxy budget. Connecting sampled sizes locates descriptive sign changes, not an optimal N or a universal threshold. These findings apply to the focal CIFAR regimes and the fixed 1200-update recipe, which does not keep examples consumed constant across N.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/ce_only.pdf}
+\caption{Proxy-only supervised learning on CIFAR-10. Accuracy and NLL as
+functions of N, with individual seeds and their aggregate. There are
+fifteen unique CE runs: five sizes × three seeds. CE has no
+private-allocation dependence. The update budget is fixed, while
+effective batch size and examples consumed vary with N.}
+\label{fig:5}
+\end{figure}
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth,height=0.78\textheight,keepaspectratio]{figures/proxy_differences.pdf}
+\caption{Public-label budget and the value of teacher selection. CIFAR
+differences EXPERT−CE, FedDF−CE and EXPERT−FedDF over nested balanced
+proxy subsets, with accuracy and NLL shown separately. There are 45
+pairs per contrast, formed from 105 unique students; reused CE and
+full-size anchors are not new replicates. Lines connect observed N
+values, not fitted thresholds.}
+\label{fig:6}
+\end{figure}

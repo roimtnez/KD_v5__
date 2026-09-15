@@ -1,0 +1,76 @@
+\hypertarget{setting-and-methods}{%
+\section{Setting and methods}\label{setting-and-methods}}
+
+\hypertarget{data-roles-and-expertise-estimation}{%
+\subsection{Data roles and expertise estimation}\label{data-roles-and-expertise-estimation}}
+
+Let K teachers solve a C-class classification task. Teacher k produces logits \(z_k(x)\in\mathbb R^C\). Each client has three disjoint private subsets: training data, validation data for checkpoint selection, and expertise data for estimating class-conditional accuracy after selection. The public proxy P contains labeled pairs (x,y), is reserved before private allocation, and is disjoint from all client subsets. The official test set is reserved for final student evaluation.
+
+For the selected, frozen teacher, let \(n^E_{k,c}\) be the number of expertise examples of class c and \(\widehat a^E_{k,c}\) its accuracy on those examples. We define
+
+\[
+M_{k,c}=\mathbf{1}\left[n^E_{k,c}>0\;\land\;\widehat a^E_{k,c}\geq\tau_d\right].
+\]
+
+The threshold \(\tau_d\) is fixed per dataset. A zero mask entry denotes competence not accredited by this rule, including the case of no observations. It does not establish incompetence. In particular, the statistic measures correct prediction conditional on the true class; it does not certify rejection of inputs from other classes.
+
+Training presence is defined separately: \(A_{k,c}=\mathbf 1[n^{train}_{k,c}>0].\) It records classes used for gradient updates, not classes observed in validation, expertise or the proxy. The presence control reconstructs A from the original training indices and verified labels, without retraining teachers. Even in an IID allocation, A need not equal M: class exposure does not guarantee that a teacher meets the competence threshold.
+
+\hypertarget{contributor-selection-and-pooling}{%
+\subsection{Contributor selection and pooling}\label{contributor-selection-and-pooling}}
+
+At temperature \(T>0\), define \(p_k^T(x)=\operatorname{softmax}(z_k(x)/T)\). For a nonempty selected set S(x), the two pooling operators are
+
+\[
+q_{\mathrm{logit}}(x)=\operatorname{softmax}\left(\frac{1}{T|S(x)|}\sum_{k\in S(x)}z_k(x)\right),
+\qquad
+q_{\mathrm{prob}}(x)=\frac{1}{|S(x)|}\sum_{k\in S(x)}p_k^T(x).
+\]
+
+Uniform aggregation uses all teachers. EXPERT uses the proxy label and mask to select
+
+\[S_E(x)=\{k:M_{k,y(x)}=1\}.\]
+
+Presence-prob uses \(S_A(x)=\{k:A_{k,y(x)}=1\}\) and the same full-vector probability pooling as EXPERT. The comparison changes the selection mask, leaving teachers and the pooling operator fixed. If A=M, both methods construct identical targets and, under the shared deterministic recipe, should yield identical students.
+
+ORACLE instead selects teachers whose individual top prediction matches the proxy label:
+
+\[S_O(x)=\{k:\arg\max_c z_{k,c}(x)=y(x)\}.\]
+
+ORACLE is a sample-level diagnostic reference rather than a guaranteed upper bound on student performance. Both EXPERT and ORACLE exploit proxy labels, but encode different selection rules. The six-arm baseline contains uniform and ORACLE pooling in both spaces, EXPERT probability pooling, and its support-restricted variant. Presence-prob is a seventh KD arm at the full proxy, added as a separately identified control.
+
+If a selected set is empty, all selection-based variants use the common fallback
+
+\[q_{\mathrm{fallback}}(x)=\operatorname{softmax}\left(\frac{1}{KT}\sum_{k=1}^{K}z_k(x)\right).\]
+
+Thus, the probability-based variants contain an explicit logit-pooling exception on fallback examples. We record these events rather than silently treating them as ordinary probability aggregation.
+
+\hypertarget{support-restriction}{%
+\subsection{Support restriction}\label{support-restriction}}
+
+EXPERT-prob retains each selected teacher's complete distribution. EXPERT-prob-SR uses the same selected set but restricts each teacher separately:
+
+\[
+\widetilde p^T_{k,c}(x)=
+\frac{M_{k,c}\,p^T_{k,c}(x)}{\sum_j M_{k,j}\,p^T_{k,j}(x)},
+\qquad
+q_{\mathrm{SR}}(x)=\frac{1}{|S_E(x)|}\sum_{k\in S_E(x)}\widetilde p_k^T(x).
+\]
+
+Every selected teacher has nonempty support because it is accredited for y(x). The implementation computes a stable softmax over supported logits, avoiding division by numerically underflowed probability mass. Empty selection still invokes the common fallback.
+
+For a non-fallback example, restriction cannot decrease the probability each selected teacher assigns to the true class: that class remains in support and the normalization denominator is at most one. Consequently, true-class target probability cannot decrease and target NLL cannot increase. This algebraic property does not guarantee improved target top-1 accuracy or improved student generalization. It makes student-level evaluation essential.
+
+We measure the pre-restriction outside-expertise mass \(u_k(x)=1-\sum_c M_{k,c}p^T_{k,c}(x).\) The reported statistic averages u over selected teacher--sample events, excluding fallback examples. It is the same pre-restriction quantity in both arms, not an effect generated by SR. Because samples can select different numbers of teachers, this event average need not equal an equally weighted average of per-sample ensemble mass.
+
+\hypertarget{student-objectives}{%
+\subsection{Student objectives}\label{student-objectives}}
+
+The distillation student with logits \(s_\theta(x)\) minimizes
+
+\[
+\mathcal L_{\mathrm{KD}}=T^2\,\mathbb E_{x\in P}\left[
+\operatorname{KL}\left(q(x)\,\Vert\,\operatorname{softmax}(s_\theta(x)/T)\right)\right].
+\]
+
+The supervised reference minimizes cross-entropy against y(x) on the same proxy subset. Neither reference receives private training examples. Teacher-derived targets do carry information learned from private data, but the CE--KD comparison also changes the training objective and therefore does not isolate a causal effect of private knowledge alone.

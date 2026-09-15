@@ -748,3 +748,7 @@ régimen, con tres diferencias por seed y SD muestral. Esta extensión es una pr
 pendiente distinta de la curva CE/EXPERT ya cerrada; no se añade silenciosamente al
 inventario original de 60 ejecuciones. El CSV nuevo y las referencias N=10000 deberán
 incorporarse a una nueva instantánea antes del análisis de esos 45 pares.
+
+### Manuscrito LaTeX por secciones
+
+Disponible en [docs/article1_paper/latex](docs/article1_paper/latex/README.md): texto completo, seis figuras y bibliografía. Compila con XeLaTeX y latexmk; no necesita resultados locales. La lectura íntegra del antecedente monoclase TMLR 2025 sigue pendiente por acceso bloqueado, y no se presenta como completada.
