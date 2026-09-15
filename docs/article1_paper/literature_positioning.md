@@ -39,3 +39,9 @@ No afirmar: primera selección de especialistas; primer estudio de monoclase; su
 ## Comprobación editorial
 
 El manuscrito distingue referencias bibliográficas de baselines implementados. Las referencias [1]–[7] están citadas en el cuerpo; no se incorporan cifras de rendimiento de terceros como comparación cuantitativa. La versión de envío deberá añadir las citas específicas de datasets/arquitecturas y adaptar las entradas al estilo de la revista.
+
+## Reintento de acceso — 15 de septiembre de 2026
+
+Se volvió a consultar el índice oficial de TMLR y se intentó obtener el PDF de OpenReview, sus endpoints públicos y la copia HAL (hal-05272000). El texto completo siguió inaccesible: verificación de navegador, HTTP 403 o acceso denegado. **La lectura íntegra sigue pendiente**; no se añadió una comparación metodológica deducida del título o del abstract. Es necesario facilitar el PDF o una copia pública accesible antes de cerrar el posicionamiento de novedad.
+
+La versión LaTeX mantiene el alcance prudente de la sección de trabajo relacionado. El empaquetado y la compilación del manuscrito no cierran este pendiente bibliográfico.
