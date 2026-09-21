@@ -1,34 +1,46 @@
-> Documento histórico anterior a la auditoría del 14 de septiembre. El estado actual y las conclusiones verificadas están en [audit_20260914/report.md](audit_20260914/report.md) y en el [notebook editorial](../../notebooks/article1_paper.ipynb). Las menciones a presencia pendiente o a falta de resultados locales describen el entorno anterior.
-
-# Who and What to Teach: Expertise-Aware Distillation under Client Specialization
+# Who and What to Teach: Class Presence and Measured Competence in One-Shot Federated Distillation
 
 *A controlled study with a labeled public proxy*
 
-> Working draft v0.1. Authors, venue and final formatting are pending. Numerical results refer to the published v3 closure snapshot of 2026-09-09 21:48 UTC. Editorial notes and the evidence ledger at the end are not manuscript text. Related work is a starting point, not an exhaustive novelty assessment.
+> Working draft v0.2, 14 September 2026. Evidence is frozen to the audit published at commit b43da870bc5a20f7c533089b4145503fdfe995cc. Authors and venue remain to be specified. Editorial decisions and unresolved submission checks are kept in plan.md rather than mixed with the paper text.
 
 ## Abstract
 
-One-shot federated distillation combines locally trained models into a global student, but class specialization challenges the assumption that all teachers should contribute equally to every example. We study this problem with a labeled public proxy and a binary client–class expertise mask estimated independently of teacher checkpoint selection. Our analysis separates three decisions: which teachers contribute, whether their outputs are pooled in logit or probability space, and whether their class support is restricted. Across MNIST, Fashion-MNIST and CIFAR-10, six allocation regimes and three seeds, expertise-based probability pooling substantially improves over uniform probability pooling in specialized conditions. On CIFAR-10, the mean accuracy gain is 28.56 percentage points under Dirichlet α=0.1 and 69.29 points under single-class allocation. However, support restriction can improve target accuracy while reducing student accuracy, and the value of distillation depends on the public-label budget. In the CIFAR-10 IID condition, the advantage over proxy-only supervision is 10.88 points with 500 proxy examples, but becomes −3.73 points with 10,000 examples. These results support expertise-aware routing within the studied protocol while identifying limits to support restriction and to the benefit of teacher knowledge when labeled proxy data are plentiful.
+One-shot federated distillation combines local teachers into a global student, but class specialization makes their contributions uneven. We study whether selecting teachers by measured class competence adds value beyond knowing which classes they encountered during training, and whether restricting selected teachers' outputs improves the distilled student. Our protocol uses a labeled public proxy and separate private training, validation and expertise splits. Across three datasets, six client allocations and three seeds, we compare selection rules, logit and probability pooling, support restriction, and proxy-only supervision. The agreed study contains 471 student runs. Under disjoint two-class and single-class allocations, presence and expertise masks coincide in the observed conditions: large improvements over uniform pooling do not establish an additional benefit from measuring competence there. Under CIFAR-10 Dirichlet allocation with alpha=0.5, measured competence adds 5.25 percentage points of mean accuracy over presence, while other regimes expose accuracy–likelihood trade-offs. Restriction lowers target negative log-likelihood in all six CIFAR-10 regimes but increases student negative log-likelihood in all six and reduces student accuracy in five. Finally, a proxy-size study shows that improvements over uniform distillation need not imply improvements over direct supervision. These results distinguish support-aware selection from competence accreditation and identify limits to inferring student utility from target quality.
 
 ## 1. Introduction
 
-One-shot federated learning requires a server to construct a useful global model after local training, without further rounds of client optimization. Distillation offers a way to combine predictions rather than directly average model parameters. The server evaluates an ensemble of local teachers on a proxy dataset and trains a student to match its targets. The resulting model therefore depends not only on the quality of individual teachers, but also on how their potentially incompatible predictions are combined.
+One-shot federated distillation constructs a global student from independently trained local models without further rounds of client optimization. Distillation transfers an ensemble's outputs into a single model [1], and federated model fusion extends this principle to client models [2,3]. Under heterogeneous class allocations, however, the server must decide which teachers should contribute to each proxy example and which parts of their predictions should be transferred.
 
-Client specialization makes this combination problem particularly consequential. A teacher trained primarily on a subset of classes may contribute useful predictions within that subset while providing unreliable scores elsewhere. Uniform aggregation does not distinguish these roles. Nevertheless, removing every prediction outside a teacher's accredited classes may also discard relationships that are useful for training the student. Selection of contributors and restriction of their outputs are distinct design choices and should be evaluated separately.
+Class presence and predictive competence provide different answers to the first question. A teacher may have encountered a class without predicting it reliably. Conversely, excluding teachers that never trained on a class may already explain much of the improvement obtained by a more elaborate competence rule. A comparison against uniform aggregation alone cannot distinguish these explanations. This distinction is particularly relevant when classes are distributed in disjoint groups: a competence mask may reproduce the training-presence mask exactly.
 
-We investigate these choices in a setting with a labeled public proxy and an explicit binary expertise mask. The mask records whether a frozen teacher meets a fixed class-conditional accuracy threshold on a private expertise split. For each proxy example, EXPERT selects teachers accredited for its true class and averages their complete probability distributions. We compare this rule with uniform aggregation and a label-informed ORACLE that selects teachers whose prediction is correct for that individual example. We then vary the pooling operator and restrict each selected teacher's probability support.
+Contributor selection and output restriction address different questions. After choosing a teacher for a proxy example, the server can preserve its complete class distribution or remove probabilities outside its accredited classes. Complete distributions may convey useful interclass relationships, but restriction also changes their concentration. Moreover, if selection uses the true proxy label, restriction can improve target likelihood by construction. An apparently better target is therefore not sufficient evidence of a better distilled student.
 
-A useful distillation target is not sufficient evidence that distillation is preferable to direct use of the public labels. Accordingly, our evaluation includes a student trained by cross-entropy on the same proxy and a focal CIFAR-10 study with nested proxy subsets. These comparisons expose a distinction between recovering performance relative to a weak ensemble target and adding value beyond proxy-only supervision.
+We study these choices with a labeled public proxy and a binary expertise mask estimated after teacher checkpoint selection. EXPERT selects teachers accredited for the proxy label and averages their full probability vectors. A training-presence control replaces accreditation with a record of observed training classes, while ORACLE selects teachers whose top prediction is correct for the individual sample. We compare pooling operators and restrict the outputs of the same selected experts. Related studies already consider certainty-weighted federated distillation and monoclass teachers [4,5]; our question concerns the incremental utility and limitations of these specific information sources under a shared experimental protocol.
 
-Our contributions are an explicit separation of contributor selection, pooling and support in a controlled one-shot protocol; an evaluation of class-conditional expertise routing across six client-allocation regimes; and an analysis of its practical limits through support ablations and public-label budgets. We report both accuracy and negative log-likelihood (NLL), retain unfavorable comparisons, and restrict conclusions to the evaluated architectures, temperatures and budgets.
+The availability of public labels also changes the practical reference point. A student can learn directly from those labels without accessing teachers. We therefore compare EXPERT and uniform distillation with proxy-only cross-entropy training over nested proxy subsets. This separates recovering performance relative to an unsuitable ensemble target from adding value beyond direct supervision.
 
-## 2. Related work and scope
+Our contributions are threefold. First, we evaluate training presence and measured competence as distinct routing signals using the same teachers and student-training controls. Second, we separate contributor selection, pooling and output restriction, and show why their target-level diagnostics must be interpreted alongside student accuracy and likelihood. Third, we evaluate both uniform and expertise-based distillation against direct supervision across public-label budgets. The contribution is a controlled empirical characterization of these choices, not a claim that teacher selection or specialist distillation is itself new.
 
-Ensemble distillation provides a mechanism for federated model fusion. FedDF trains a central classifier from client outputs on unlabeled data [1]. We use a uniform logit-pooling reference inspired by this mechanism within our fixed one-shot protocol. The label “FedDF-logit” identifies that reference and should not be read as a reproduction of every component or communication schedule of the original FedDF algorithm.
+## 2. Related work and positioning
 
-One-shot learning without auxiliary data addresses a different resource constraint. DENSE studies data-free one-shot federated learning [2], whereas our protocol assumes an existing public proxy and uses its labels for expertise routing. This distinction matters when comparing methods: availability of proxy inputs, labels, expertise statistics and client models must be accounted for separately.
+### 2.1. Distillation and federated model fusion
 
-**Editorial task before submission:** expand this section with verified literature on heterogeneous ensemble distillation, expert selection and specialist models, including recent methods compatible with the same information budget. The current experiments do not establish state-of-the-art superiority or the novelty of every mathematical component.
+Knowledge distillation compresses predictive information from a model or ensemble into a student; the original formulation also discusses ensembles containing specialist models [1]. FedMD applies distillation to collaboration between participants with independently designed architectures [2]. FedDF develops ensemble-based server model fusion using client predictions on unlabeled auxiliary data [3]. These works establish distillation as a mechanism for combining models, rather than establish the value of the particular class-conditional accreditation rule examined here.
+
+Our FedDF-logit label denotes a uniform logit-pooling reference within the implemented one-shot recipe. It does not identify a full reproduction of the original iterative FedDF protocol. The companion FedDF-prob arm changes only the pooling operator. Because the present experiments use fixed architectures within each dataset, they also do not test the architecture-heterogeneity capabilities motivating these earlier methods.
+
+### 2.2. Unequal teacher contributions and specialization
+
+FedAUX combines auxiliary-data pretraining with certainty-based weighting of ensemble predictions [4]. This is relevant prior art for assigning unequal influence to teachers. Our mask uses class-conditional accuracy on a private expertise split, while routing additionally uses the labeled proxy. These information sources and training procedures differ; we do not treat our internal confidence or energy controls as implementations of FedAUX.
+
+Maron, Fresse and Orzalesi study one-shot distillation from monoclass teachers, explicitly addressing knowledge fragmentation and out-of-distribution supervision [5]. Their setting is directly relevant to the single-class endpoint considered here. Accordingly, our contribution is not the discovery that monoclass specialization affects knowledge transfer. The present evidence instead contrasts presence with measured competence across IID, Dirichlet and disjoint allocations, then relates output restriction and proxy budgets to student accuracy and NLL. This describes our experimental scope; it does not assert that every component is absent from that prior work.
+
+### 2.3. Proxy resources and scope of comparison
+
+DENSE addresses data-free one-shot federated learning through data generation followed by model distillation [6]. Our setting assumes an existing labeled proxy, so the experiments do not establish superiority over methods operating without those resources. Likewise, Federated Oriented Learning targets one-shot personalization using a broader model-alignment procedure [7], whereas our evaluated endpoint is a single global student.
+
+We therefore position this paper as a study of routing and transfer under an explicit information budget. Uniform pooling receives teacher outputs and proxy inputs; presence and EXPERT additionally use proxy labels and client–class metadata; ORACLE uses proxy labels to select correct individual predictions. The supervised reference uses the same public labels without teacher predictions. Accounting for these differences is necessary for interpreting the contrasts and avoids conflating our internal ablations with an exhaustive state-of-the-art benchmark.
 
 ## 3. Setting and methods
 
@@ -44,6 +56,10 @@ $$
 
 The threshold τ_d is fixed per dataset. A zero mask entry denotes competence not accredited by this rule, including the case of no observations. It does not establish incompetence. In particular, the statistic measures correct prediction conditional on the true class; it does not certify rejection of inputs from other classes.
 
+Training presence is defined separately:
+$A_{k,c}=\mathbf 1[n^{train}_{k,c}>0].$
+It records classes used for gradient updates, not classes observed in validation, expertise or the proxy. The presence control reconstructs A from the original training indices and verified labels, without retraining teachers. Even in an IID allocation, A need not equal M: class exposure does not guarantee that a teacher meets the competence threshold.
+
 ### 3.2. Contributor selection and pooling
 
 At temperature T>0, define p_k^T(x)=softmax(z_k(x)/T). For a nonempty selected set S(x), the two pooling operators are
@@ -58,11 +74,13 @@ Uniform aggregation uses all teachers. EXPERT uses the proxy label and mask to s
 
 $$S_E(x)=\{k:M_{k,y(x)}=1\}.$$
 
+Presence-prob uses $S_A(x)=\{k:A_{k,y(x)}=1\}$ and the same full-vector probability pooling as EXPERT. The comparison changes the selection mask, leaving teachers and the pooling operator fixed. If A=M, both methods construct identical targets and, under the shared deterministic recipe, should yield identical students.
+
 ORACLE instead selects teachers whose individual top prediction matches the proxy label:
 
 $$S_O(x)=\{k:\arg\max_c z_{k,c}(x)=y(x)\}.$$
 
-ORACLE is a sample-level diagnostic reference rather than a guaranteed upper bound on student performance. Both EXPERT and ORACLE exploit proxy labels, but encode different selection rules. The six-method main study contains uniform and ORACLE pooling in both spaces, EXPERT probability pooling, and its support-restricted variant.
+ORACLE is a sample-level diagnostic reference rather than a guaranteed upper bound on student performance. Both EXPERT and ORACLE exploit proxy labels, but encode different selection rules. The six-arm baseline contains uniform and ORACLE pooling in both spaces, EXPERT probability pooling, and its support-restricted variant. Presence-prob is a seventh KD arm at the full proxy, added as a separately identified control.
 
 If a selected set is empty, all selection-based variants use the common fallback
 
@@ -85,6 +103,10 @@ Every selected teacher has nonempty support because it is accredited for y(x). T
 
 For a non-fallback example, restriction cannot decrease the probability each selected teacher assigns to the true class: that class remains in support and the normalization denominator is at most one. Consequently, true-class target probability cannot decrease and target NLL cannot increase. This algebraic property does not guarantee improved target top-1 accuracy or improved student generalization. It makes student-level evaluation essential.
 
+We measure the pre-restriction outside-expertise mass
+$u_k(x)=1-\sum_c M_{k,c}p^T_{k,c}(x).$
+The reported statistic averages u over selected teacher–sample events, excluding fallback examples. It is the same pre-restriction quantity in both arms, not an effect generated by SR. Because samples can select different numbers of teachers, this event average need not equal an equally weighted average of per-sample ensemble mass.
+
 ### 3.4. Student objectives
 
 The distillation student with logits s_θ(x) minimizes
@@ -106,102 +128,129 @@ The implementation uses MnistNet for MNIST/Fashion-MNIST and ResNet9 for CIFAR-1
 
 Paired KD comparisons share teachers, proxy, expertise mask where applicable, student initialization, batch order and update budget. CE comparisons share the relevant proxy and student-training controls. We report differences paired by seed, their mean and sample standard deviation. Official-test accuracy and NLL are evaluated using the final student's ordinary logits, without applying the distillation temperature at evaluation. Target metrics describe training targets on the proxy and are not held-out generalization estimates.
 
-The main study comprises 324 KD executions and nine full-proxy supervised executions. The CIFAR budget study uses N∈{100,500,1000,5000,10000} in IID, α=0.1 and single. Smaller proxies are balanced nested subsets of the original proxy. This adds 12 CE and 36 KD executions; with reused full-proxy anchors, the curve contains 60 unique executions and 45 paired comparisons. CE anchors are shared across regimes and do not constitute additional independent replicates. The effective batch is min(256,N), with incomplete final batches retained, so fixing updates does not fix the number of examples consumed.
+The six-arm baseline comprises 324 KD executions. The presence control adds 54, and full-proxy supervision adds nine. The CIFAR budget study uses N∈{100,500,1000,5000,10000} in IID, α=0.1 and single. Smaller proxies are balanced nested subsets of the original proxy. The reduced sizes add 12 CE, 36 EXPERT-prob and 36 FedDF-prob executions. With reused full-proxy anchors, the curve contains 105 unique students: 15 CE, 45 EXPERT and 45 FedDF. They support 135 pairs, 45 for each of EXPERT−CE, FedDF−CE and EXPERT−FedDF. Across the baseline and agreed extensions there are 471 unique student runs; the 21 full-proxy curve anchors are not counted twice. CE anchors are shared across regimes and do not constitute additional independent replicates. The effective batch is min(256,N), with incomplete final batches retained, so fixing updates does not fix the number of examples consumed.
+
+The audit additionally retains 164 optional executions: 41 each for EXPERT-logit, confidence-logit, consensus-logit and energy-logit. They do not fill the missing CIFAR conditions and are not counted among the 471 agreed runs. No KD temperatures other than T=8 were found. Reported variability is sample SD over paired seeds, not a confidence interval; clients and proxy examples are not independent experimental replications.
 
 ## 5. Results
 
-### 5.1. Selection becomes consequential under specialization
+### 5.1. Uniform aggregation under client specialization
 
-Expertise routing produces much larger gains over uniform probability pooling in specialized conditions than in IID. In CIFAR-10, EXPERT-prob−FedDF-prob is −0.08 percentage points (pp) in IID, +28.56 pp under α=0.1, +26.87 pp in multi and +69.29 pp in single. The corresponding single-class gains are +88.73 pp for MNIST and +80.30 pp for Fashion-MNIST. These differences support the utility of the labeled selection procedure in the studied regimes, rather than universal superiority of any teacher-ranking rule.
+Figure 1 places the routing comparisons alongside proxy-only supervision. The principal contrasts share the local teachers; differences between students therefore reflect the evaluated target-construction procedure under the common recipe. Uniform probability pooling becomes a particularly weak reference under disjoint allocation. In single-class conditions, EXPERT−FedDF-prob improves mean accuracy by 88.73 pp on MNIST, 80.30 pp on Fashion-MNIST and 69.29 pp on CIFAR-10. In CIFAR-10 IID, the difference is instead −0.08 pp. These results establish the usefulness of the combined label-and-mask routing procedure in the specialized conditions, without yet attributing its gains to measuring competence.
 
-![Selection and expertise](figures/routing_student_test_accuracy.png)
+ORACLE-logit−FedDF-logit is positive in mean accuracy in all eighteen dataset–regime groups. However, ORACLE is not a student-performance ceiling. On CIFAR-10 under alpha=0.1, ORACLE-prob−EXPERT-prob is −4.06 pp. Selecting individual correct predictions does not optimize the student's test risk directly.
 
-**Figure 1.** Paired accuracy differences across allocation regimes. Top: ORACLE-logit−FedDF-logit. Bottom: EXPERT-prob−FedDF-prob. Markers show means and bars sample SD over three seeds. Each panel uses its own vertical scale. The rows differ in selection information and pooling operator; comparing their magnitudes is not a causal decomposition.
+![**Figure 1](audit_20260914/figures/overview_references.png)
 
-ORACLE does not always outperform EXPERT. In CIFAR-10 α=0.1, ORACLE-prob−EXPERT-prob is −4.06 pp. Correctness-based selection of individual teacher predictions does not directly optimize the final student's generalization. We therefore interpret ORACLE as a diagnostic of alternative routing rather than a ceiling that EXPERT must approach from below.
+**Figure 1. Student-level reference comparison at N=10000.** Absolute accuracy and NLL across datasets and categorical allocation regimes. Error bars show sample SD across three seeds. CE is the same dataset/seed reference reused across regimes, not additional replicates. Methods have different information budgets; the plot is not a ranking under identical access to labels and metadata.
 
-### 5.2. The effect of pooling depends on selection
+### 5.2. Class presence versus measured competence
 
-Probability and logit pooling yield materially different students for uniform aggregation even at T=8. In CIFAR-10, FedDF-prob improves over FedDF-logit by 12.54 pp under α=0.1 and 11.39 pp in multi. For ORACLE, the corresponding differences are −1.89 pp and −0.05 pp. Pooling effects therefore depend on the selected ensemble and cannot be inferred from a single routing rule.
+The presence control changes the interpretation of the disjoint-allocation gains. In every verified multi and single condition, A and M coincide; the corresponding presence and EXPERT results coincide as well. In these conditions, the large improvement over uniform pooling is achievable with training-presence information. It does not demonstrate an additional benefit from estimating class-conditional accuracy.
 
-The bounded coordinates of a probability distribution do not make probability pooling invariant to teacher logit scale: changing that scale still changes softmax confidence. Our findings establish an empirical operator comparison at the evaluated temperature, not a proof that probabilities are universally preferable or that calibration mismatch is eliminated.
+The two masks differ in Dirichlet conditions, where competence accreditation can add value. For CIFAR-10, EXPERT−presence improves mean accuracy by 1.37 ± 0.15 pp at alpha=1, 5.25 ± 0.94 pp at alpha=0.5, and 3.18 ± 2.91 pp at alpha=0.1. Fashion-MNIST shows a 2.95 ± 1.61 pp gain at alpha=0.5; the MNIST gains are smaller. Table 1 reports all CIFAR regimes rather than selecting only favorable conditions.
 
-### 5.3. Restriction improves some target diagnostics while harming students
+The accuracy gains do not imply uniform improvement in probability quality. On CIFAR-10, EXPERT increases NLL relative to presence at alpha=1 and alpha=0.1, while reducing it at alpha=0.5. In IID, despite differences between A and M, the mean accuracy effect is −0.08 ± 0.39 pp. Accreditation is consequently useful in some allocations and metrics, rather than uniformly preferable.
 
-Support restriction does not consistently improve the student. On CIFAR-10 it reduces mean accuracy in five of six regimes: SR−full is −6.53 pp in IID, −6.74 pp under α=0.1 and −1.31 pp in multi, while single yields +0.57 pp. In IID, target accuracy improves by 9.53 pp despite the lower student accuracy. This discrepancy demonstrates why a target-level improvement cannot substitute for evaluation of the distilled model.
+These comparisons isolate the change from presence-based to accuracy-based routing under a fixed recipe. They do not isolate an effect of competence independently of ensemble size: rejecting teachers also changes the number and composition of contributors.
 
-These observations are compatible with the possibility that complete distributions contain useful information, but they do not identify removal of dark knowledge as the unique cause. Restriction changes target concentration and relationships between classes simultaneously. Moreover, some improvement in true-class target probability is guaranteed by the labeled restriction rule itself.
+**Table 1. CIFAR-10 effects at N=10000.** Mean ± sample SD of paired differences over seeds 42/43/44. Accuracy is in pp; NLL is unscaled. Positive accuracy favors EXPERT; negative NLL favors EXPERT.
 
-### 5.4. Public-label supervision changes the practical comparison
+| Allocation | EXPERT − uniform accuracy | EXPERT − presence accuracy | EXPERT − presence NLL |
+|---|---:|---:|---:|
+| iid | -0.08 ± 0.39 | -0.08 ± 0.39 | +0.029 ± 0.024 |
+| alpha1p0 | +1.38 ± 0.16 | +1.37 ± 0.15 | +0.022 ± 0.035 |
+| alpha0p5 | +6.54 ± 0.93 | +5.25 ± 0.94 | -0.060 ± 0.043 |
+| alpha0p1 | +28.56 ± 11.18 | +3.18 ± 2.91 | +0.133 ± 0.145 |
+| multi | +26.87 ± 4.15 | +0.00 ± 0.00 | +0.000 ± 0.000 |
+| single | +69.29 ± 0.71 | +0.00 ± 0.00 | +0.000 ± 0.000 |
 
-At N=10000, EXPERT-prob has lower mean accuracy than CE in every CIFAR-10 regime. Its differences are −3.73 pp in IID, −2.64 pp under α=0.1 and −0.25 pp in single. The result qualifies the large gains over uniform distillation: repairing an ensemble target does not necessarily outperform learning directly from the available labels.
+![**Figure 2](audit_20260914/figures/selection_competence.png)
 
-Accuracy and NLL do not always favor the same procedure. In CIFAR-10 IID, EXPERT-prob has lower accuracy than CE but improves NLL by 0.1132. In single, its NLL is worse by 0.8369 despite the small mean accuracy difference. We consequently avoid an undifferentiated claim of better performance and report both metrics.
+**Figure 2. Selection and competence contrasts.** Differences are computed within dataset, allocation and seed before summarization. The EXPERT−presence contrast tests the incremental effect of accuracy-based accreditation; zero effects in multi/single accompany identical masks. Read accuracy and NLL together. Mean ± sample SD summarizes three seeds, not independent client replications.
 
-**Table 1. CIFAR-10 paired effects at N=10000 and T=8 for KD.** Mean ± sample SD over three seeds. Accuracy differences are in pp; lower ΔNLL favors EXPERT over CE. All six regimes are shown. These are paired-effect statistics, not absolute method performance.
+### 5.3. Pooling space depends on the routing rule
 
-| Regime | EXPERT−uniform accuracy (pp) | SR−full accuracy (pp) | EXPERT−CE accuracy (pp) | EXPERT−CE NLL |
-|---|---:|---:|---:|---:|
-| iid | -0.08 ± 0.39 | -6.53 ± 1.24 | -3.730 ± 0.885 | -0.113 ± 0.054 |
-| alpha1p0 | +1.38 ± 0.16 | -2.78 ± 0.63 | -3.457 ± 1.082 | -0.110 ± 0.050 |
-| alpha0p5 | +6.54 ± 0.93 | -4.01 ± 1.24 | -3.633 ± 0.798 | -0.085 ± 0.068 |
-| alpha0p1 | +28.56 ± 11.18 | -6.74 ± 2.24 | -2.643 ± 1.049 | +0.153 ± 0.107 |
-| multi | +26.87 ± 4.15 | -1.31 ± 1.09 | -3.917 ± 1.657 | +0.700 ± 0.015 |
-| single | +69.29 ± 0.71 | +0.57 ± 0.87 | -0.253 ± 1.290 | +0.837 ± 0.166 |
+Uniform pooling remains sensitive to aggregation space at T=8. On CIFAR-10, FedDF-prob−FedDF-logit improves mean accuracy by 12.54 pp at alpha=0.1 and 11.39 pp in multi. The corresponding ORACLE differences are −1.89 and −0.05 pp. Thus, an operator comparison for one selected ensemble cannot be generalized to every routing rule.
 
-### 5.5. The value of distillation depends on the proxy budget
+Probability coordinates are bounded, but their values still depend on teacher logit scale through softmax. Arithmetic probability pooling therefore does not eliminate scale or calibration mismatch. Nor do small observed differences demonstrate equivalence between operators.
 
-The CIFAR-10 IID curve reveals a substantial advantage for KD at smaller proxy sizes. EXPERT-prob−CE is +10.88 pp at N=500 and +10.41 pp at N=1000, decreasing to +0.93 pp at N=5000 and −3.73 pp at N=10000. Thus, the comparison at the full proxy alone would miss a region where teacher-derived targets are beneficial under the fixed update budget.
+The direct EXPERT pooling comparison is complete for MNIST and Fashion-MNIST but only includes CIFAR seed 42 in five regimes, with no single-class pair. Its CIFAR observations are descriptive single-seed results: SD is not estimable there. Figure 3 retains these gaps rather than substituting optional observations for a complete comparison. Conclusions about temperature robustness are outside the available evidence.
 
-The pattern is weaker and more variable under α=0.1, where the mean accuracy differences are +1.23 pp at N=500 and +1.18 pp at N=1000, but −2.36 pp at N=5000. In single, N=1000 gives a +2.93 pp accuracy difference alongside a +0.8606 NLL penalty. Benefits in classification accuracy need not imply improved probabilistic predictions.
+![**Figure 3](audit_20260914/figures/aggregation_space.png)
 
-![Public-proxy budget](figures/proxy_curve.png)
+**Figure 3. Probability minus logit pooling.** FedDF and ORACLE comparisons contain three paired seeds per condition. The EXPERT comparison has incomplete CIFAR coverage: one seed for five allocations and no single-class pair. Do not compare a missing SD with a zero SD or interpret small differences as equivalence. All available KD runs use T=8.
 
-**Figure 2.** EXPERT-prob−CE on CIFAR-10 as a function of N. Top: accuracy differences in pp; bottom: NLL differences. Colored lines represent seeds and black markers show their mean with sample SD. Positive values favor KD for accuracy and disfavor it for NLL. The 1,200-update budget is shared, but examples consumed need not match across N. Lines connect evaluated sizes and do not estimate a continuous response function.
+### 5.4. Better proxy targets do not guarantee better students
 
-The changes of sign locate descriptive intervals between sampled sizes, not an optimal N or a statistically established equivalence threshold. The curve's conclusions are restricted to CIFAR-10, the three selected regimes and the fixed training recipe.
+On CIFAR-10, SR reduces target NLL in all six regimes while increasing student test NLL in all six. Mean student accuracy decreases in five regimes: SR−full is −6.53 pp in IID, −6.74 pp at alpha=0.1 and −1.31 pp in multi. Single is the exception, at +0.57 ± 0.87 pp. In IID, target accuracy improves by 9.53 pp while student accuracy falls. The disagreement is therefore visible beyond likelihood alone.
+
+The result should not be generalized into universal harm from restriction. MNIST has positive mean accuracy effects in alpha=1, alpha=0.5 and single, and Fashion-MNIST has a positive effect in single. Their NLL patterns also contain exceptions. Figure 4 reports all five target/student metrics so that the statement remains conditional on dataset, allocation and metric.
+
+The target likelihood improvement has a structural explanation: each selected teacher supports the true proxy label, and SR increases or preserves that label's probability. This label-dependent guarantee does not extend to student risk. In particular, target metrics use the training proxy at T=8, whereas student metrics use the official test at T=1; differences in their absolute levels are not generalization gaps.
+
+Pre-restriction mass is measured from the actual teacher outputs and M, not approximated from the allocation name or fraction of absent classes. Even IID teachers can fail the expertise threshold, producing nonzero mass outside their accredited support. Supplementary mass diagnostics relate this quantity to student effects descriptively. SR simultaneously changes concentration and interclass information, so these associations and ablations do not identify dark-knowledge removal as the unique mechanism. A matched-concentration control would be a separate, currently unexecuted study.
+
+![**Figure 4](audit_20260914/figures/support_target_student.png)
+
+**Figure 4. SR minus full EXPERT: target and student outcomes.** The five rows show target accuracy, NLL and entropy on the proxy at T=8, followed by student accuracy and NLL on the official test at T=1. Mean ± sample SD of paired seeds. Target likelihood has a label-dependent monotonicity property; student metrics do not. Accuracy differences use pp. Different datasets and metrics have different vertical scales.
+
+### 5.5. Distillation value depends on the public-label budget
+
+At N=10000, EXPERT has lower mean accuracy than CE in all six CIFAR-10 allocations. Its differences are −3.73 pp in IID, −2.64 pp at alpha=0.1 and −0.25 pp in single. Accuracy and NLL can disagree: IID improves NLL over CE despite lower accuracy, while single has higher NLL. Large improvements over FedDF consequently do not establish superiority to using the public labels directly.
+
+Figure 5 first shows the CE-only response to N, independently of any routing comparison. Figure 6 then contrasts both KD methods with CE and with each other. In IID at N=500, EXPERT−CE is +10.88 ± 0.76 pp, but FedDF−CE is +12.32 ± 0.73 pp. The KD advantage at this budget therefore does not require the expertise mask; EXPERT−FedDF is −1.44 ± 0.41 pp. EXPERT has lower mean accuracy than FedDF at every evaluated IID size.
+
+Under alpha=0.1 and single, EXPERT instead exceeds FedDF in mean accuracy at all five sizes. At N=100, the respective gains are +4.01 ± 5.63 pp and +24.07 ± 1.38 pp; at N=10000 they reach +28.56 ± 11.18 pp and +69.29 ± 0.71 pp. Yet the comparison with CE is much less favorable and depends on N. For example, in IID the mean EXPERT−CE advantage changes from +7.91 pp at N=100 to −3.73 pp at N=10000, with a sign change between the evaluated sizes 5000 and 10000. The corresponding single-class sign change occurs over the same interval, but does not establish the same underlying mechanism.
+
+The curve thus separates two phenomena: selecting teachers can repair uniform distillation under specialization, while distillation's incremental value over public labels depends on the proxy budget. Connecting sampled sizes locates descriptive sign changes, not an optimal N or a universal threshold. These findings apply to the focal CIFAR regimes and the fixed 1200-update recipe, which does not keep examples consumed constant across N.
+
+![**Figure 5](audit_20260914/figures/ce_only.png)
+
+**Figure 5. Proxy-only supervised learning on CIFAR-10.** Accuracy and NLL as functions of N, with individual seeds and their aggregate. There are fifteen unique CE runs: five sizes × three seeds. CE has no private-allocation dependence. The update budget is fixed, while effective batch size and examples consumed vary with N.
+
+![**Figure 6](audit_20260914/figures/proxy_differences.png)
+
+**Figure 6. Public-label budget and the value of teacher selection.** CIFAR differences EXPERT−CE, FedDF−CE and EXPERT−FedDF over nested balanced proxy subsets, with accuracy and NLL shown separately. There are 45 pairs per contrast, formed from 105 unique students; reused CE and full-size anchors are not new replicates. Lines connect observed N values, not fitted thresholds.
 
 ## 6. Discussion and limitations
 
-Expertise routing requires information that uniform aggregation does not use. The server has both proxy labels and a competence mask derived from labeled private data. This budget is part of the method, not an implementation detail. A particularly important unresolved comparison is whether estimating class-conditional accuracy adds value beyond a mask recording which classes occur in local training. Our present results compare the complete procedure with uniform pooling but do not isolate this distinction.
+### 6.1. What measured competence adds
 
-The expertise split removes reuse of checkpoint-selection data for estimating M, but it does not make all competence estimates precise. Rare classes can have little evidence, and the selected expertise cells are not independently validated on a local test set. Nor does class-conditional accuracy establish rejection of out-of-support examples. These limitations matter especially for a future extension that must route without the proxy label.
+The presence control bounds the interpretation of the most dramatic improvements. When A=M, the data do not support an extra benefit from competence measurement: both rules generate the same routing. Where the masks differ, the accuracy gains under Dirichlet provide evidence for the usefulness of the accreditation procedure under the studied recipe. The simultaneous NLL penalties in some conditions prevent an unconditional claim of better predictions. Future refinements should state whether their objective is classification accuracy, probability quality or a specified combination, rather than choosing a metric after observing results.
 
-The experimental scope is intentionally controlled. We evaluate three datasets, fixed architectures, three seeds and one main distillation temperature. Client allocations also change sample quantities and support. Incomplete archived controls are excluded from claims requiring a complete comparison. The study is not an exhaustive SOTA benchmark, a demonstration of communication efficiency, or a comparison of optimally tuned CE and KD recipes.
+The study also distinguishes a rule from its information budget. EXPERT requires a labeled proxy and private class-conditional statistics. These are explicit inputs to the system; the mask is not inferred label-free from teacher logits. ORACLE uses the true label more directly at sample level. Even though CE and KD see the same proxy labels where applicable, their objectives differ, and KD receives teacher-derived information. The CE contrast measures the utility of the complete procedure, not an isolated causal effect of private knowledge.
 
-The v3 audit records cache and partition hashes, result identities and paired-run metadata. Checkpoint files were fingerprinted as bytes, but the published review did not independently recompute their tensor-state hashes by deserialization. Several execution commits are recorded. Historical results were known during project development; restarting the protocol does not make the official test previously unseen. We therefore distinguish the fixed recipe used for these comparisons from a claim that the entire research process was preregistered.
+### 6.2. Expertise evidence and output interpretation
+
+Separating validation from expertise avoids using the checkpoint-selection set again to construct M. It does not ensure precise estimates for rare classes. The binary threshold does not incorporate uncertainty beyond requiring an observation, and accuracy on the same expertise cells used to select M cannot independently validate those selected cells. No separate local test was retained for that purpose. Class-conditional accuracy also does not certify rejection of out-of-support inputs, which becomes especially important for unlabeled-proxy extensions.
+
+The SR findings caution against interpreting increased agreement with proxy labels as improved transfer. The mathematical target guarantee and the experimental student outcome concern different objects. Changes in class relationships and concentration remain coupled in the present ablation. These results motivate further investigation, but not a claim that all outside-mask probability mass is useful knowledge or a calibrated rejection signal.
+
+### 6.3. Scope and reproducibility
+
+The experiments cover three datasets, fixed architectures, three seeds and T=8. Dirichlet changes client quantities as well as class composition; multi fixes specific class pairs. The results are not an exhaustive SOTA comparison, a communication-efficiency measurement, or a comparison between independently optimized CE and KD training recipes. Optional controls are incomplete, and the direct EXPERT pooling evidence is particularly limited on CIFAR. Unlabeled proxy routing, synthetic proxy generation and personalization are outside the evaluated scope.
+
+The 14 September audit checked 54 teacher conditions, 540 checkpoint byte hashes and separately deserialized tensor-state hashes, using CPU and weights-only loading. It also verified partition provenance, masks, nested subsets, result identities, paired training traces, and reconstructed targets and pre-restriction mass. It did not regenerate proxy logits by inference or independently reevaluate students on test data. The audit establishes the stated scope of record and artifact consistency; it should not be described as an independent replication of training or test performance.
+
+Several execution commits are recorded. Historical test results were available during project development, and restarting the protocol does not make them previously unseen. We do not describe the research process as preregistered. The archived audit and its numerical outputs remain immutable references; the present revision changes the manuscript rather than the experiments.
 
 ## 7. Conclusion
 
-Class-conditional expertise offers a useful selection rule for one-shot distillation with a labeled public proxy. In the evaluated specialized regimes, it substantially improves students over uniform pooling. However, pooling space, support restriction and public-label availability have distinct effects: probability pooling is not interchangeable with logit pooling, more faithful targets can yield worse students, and the advantage over direct supervision depends on proxy size and regime. These findings motivate evaluating both the construction of ensemble targets and the practical value they add beyond available labels. Extending the approach to unlabeled or synthetic proxies requires additional evidence about discrimination outside each teacher's accredited classes.
+Class-aware routing can substantially improve one-shot federated distillation under client specialization, but training presence and measured competence must be distinguished. The observed disjoint allocations need no extra accreditation beyond presence, while Dirichlet conditions show additional accuracy gains with metric-dependent costs. Pooling effects depend on routing, support restriction can improve proxy targets while degrading students, and gains over uniform distillation do not imply gains over proxy-only supervision. Together, these results characterize when the evaluated selection procedure is useful and which stronger interpretations remain unsupported. Subsequent work can investigate uncertainty-aware accreditation, separate concentration from support effects, and extend routing to unlabeled or synthetic proxies without assuming that class accuracy certifies out-of-distribution rejection.
 
 ## References
 
-[1] Tao Lin, Lingjing Kong, Sebastian U. Stich, and Martin Jaggi. *Ensemble Distillation for Robust Model Fusion in Federated Learning*. NeurIPS, 2020. https://proceedings.neurips.cc/paper/2020/hash/18df51b97ccd68128e994804f3eccc87-Abstract.html
+[1] Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. *Distilling the Knowledge in a Neural Network*. 2015. https://arxiv.org/abs/1503.02531
 
-[2] *DENSE: Data-Free One-Shot Federated Learning*. NeurIPS, 2022. https://papers.nips.cc/paper/2022/hash/868f2266086530b2c71006ea1908b14a-Abstract-Conference.html
+[2] Daliang Li and Junpu Wang. *FedMD: Heterogenous Federated Learning via Model Distillation*. NeurIPS Workshop on Federated Learning for Data Privacy and Confidentiality, 2019. https://arxiv.org/abs/1910.03581
 
-## Editorial evidence ledger — remove before submission
+[3] Tao Lin, Lingjing Kong, Sebastian U. Stich, and Martin Jaggi. *Ensemble Distillation for Robust Model Fusion in Federated Learning*. NeurIPS, 2020. https://proceedings.neurips.cc/paper/2020/hash/18df51b97ccd68128e994804f3eccc87-Abstract.html
 
-| Draft component | Evidence | Status |
-|---|---|---|
-| Abstract: expertise gains | main_contrast_summary.csv, expertise_gain/student_test_accuracy | Supported as descriptive paired means |
-| Abstract: N=500 and N=10000 | proxy_curve_summary.csv and 45 published pairs | Supported for CIFAR IID only |
-| Methods and recipe | partitioning.py, local_training.py, distillation.py, runner.py | Checked against reviewed code; retain execution provenance |
-| Section 5.1 and ORACLE gap | main_contrast_summary.csv | Supported; no upper-bound claim |
-| Section 5.2 | feddf_pooling and oracle_pooling summaries | Supported at T=8; EXPERT pooling incomplete |
-| Section 5.3 | support student and target summaries | Supported; mechanism unproven |
-| Section 5.4 | private_knowledge_summary.csv | Supported; objective also differs |
-| Section 5.5 | proxy_curve_summary.csv and proxy_curve_paired.csv | Supported; no optimal-N claim |
-| Novelty/SOTA positioning | Two starting references only | Needs expanded literature review |
-| Absolute method results and main seed-level tables | Full local closure snapshot, not all rows publicly bundled | Export before submission |
+[4] Felix Sattler, Tim Korjakow, Roman Rischke, and Wojciech Samek. *FedAUX: Leveraging Unlabeled Auxiliary Data in Federated Learning*. 2021. https://arxiv.org/abs/2102.02514
 
-### Revision checklist
+[5] Cedric Maron, Virginie Fresse, and Mathieu Orzalesi. *One-Shot Federated Distillation Using Monoclass Teachers: A Study of Knowledge Fragmentation and Out-of-Distribution Supervision*. Transactions on Machine Learning Research, 2025. https://openreview.net/forum?id=ENdm5BM7aF
 
-- Contribution: describe routing and the controlled study; establish novelty against the expanded literature before claiming it.
-- Clarity: keep labeled proxy and the common logit fallback explicit; define teacher support separately from contributor selection.
-- Experimental strength: add absolute accuracy/NLL tables and SD for all headline numbers; decide whether to complete controls or the training-support-mask comparison.
-- Evaluation completeness: retain CE and unfavorable NLL outcomes; do not extrapolate the CIFAR curve to MNIST/Fashion-MNIST.
-- Method soundness: audit the information budget and historical test exposure; do not infer OOD expertise from conditional accuracy.
+[6] Jie Zhang, Chen Chen, Bo Li, Lingjuan Lyu, Shuang Wu, Shouhong Ding, Chunhua Shen, and Chao Wu. *DENSE: Data-Free One-Shot Federated Learning*. NeurIPS, 2022. https://papers.nips.cc/paper/2022/hash/868f2266086530b2c71006ea1908b14a-Abstract-Conference.html
 
-Next writing pass: complete Related Work, add the absolute-result table from the original snapshot, then finalize figure selection, captions and abstract length for the target venue. No new training is authorized or performed by this draft.
+[7] Guan Huang and Tao Shu. *Federated Oriented Learning: A Practical One-Shot Personalized Federated Learning Framework*. ICML, 2025. https://proceedings.mlr.press/v267/huang25ae.html

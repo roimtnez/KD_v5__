@@ -1,5 +1,15 @@
 # KD_v5__ — Article 1
 
+**Redacción v0.2:** [manuscrito completo en inglés](docs/article1_paper/manuscript.md),
+[organización y selección de figuras](docs/article1_paper/plan.md) y
+[posicionamiento bibliográfico](docs/article1_paper/literature_positioning.md).
+La narrativa incorpora presencia y la curva FedDF: el beneficio de medir competencia
+se distingue del beneficio de conocer las clases presentes. Se conservan las
+versiones históricas del [manuscrito](docs/article1_paper/manuscript_v0p1_historical.md)
+y del [plan](docs/article1_paper/plan_v0p1_historical.md).
+Esta revisión no modifica experimentos ni artefactos auditados. El texto completo
+del antecedente monoclase de TMLR 2025 sigue pendiente de lectura antes del envío.
+
 **Estado auditado: 14 de septiembre de 2026.** Los bloques principales y acordados
 están cerrados: **471 students únicos válidos**, 54 condiciones con diez teachers,
 54 controles de presencia y la extensión FedDF completa. No se han lanzado nuevas
